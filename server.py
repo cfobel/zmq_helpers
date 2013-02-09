@@ -20,8 +20,11 @@ class Server(object):
         pprint(uris)
 
         c = Consumer(uris['push'], uris['pull'], 1)
-        c.run()
-
+        try:
+            c.run()
+        except KeyboardInterrupt:
+            pass
+        self.producer.terminate()
 
 if __name__ == '__main__':
     server = Server('ipc://ASYNC_SERVER_REP:1', 'ipc://ASYNC_SERVER_PUB:1')

@@ -25,7 +25,10 @@ class Consumer(object):
         io_loop = IOLoop.instance()
         stream = ZMQStream(self.pull_sock, io_loop)
         stream.on_recv(self.on_recv)
-        io_loop.start()
+        try:
+            io_loop.start()
+        except KeyboardInterrupt:
+            pass
 
     def on_recv(self, multipart_message):
         message = self._deserialize(multipart_message[0])
