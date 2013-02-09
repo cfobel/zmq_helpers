@@ -1,7 +1,7 @@
 from datetime import datetime
 from multiprocessing import Process
-import re
 from uuid import uuid4
+import time
 
 import zmq
 from zmq.utils import jsonapi
@@ -10,9 +10,10 @@ from zmq.eventloop.zmqstream import ZMQStream
 
 
 class Consumer(object):
-    def __init__(self, pull_uri, push_uri):
+    def __init__(self, pull_uri, push_uri, delay=0):
         self.pull_uri = pull_uri
         self.push_uri = push_uri
+        self.delay = delay
 
     def run(self):
         self.ctx = zmq.Context.instance()
@@ -27,10 +28,19 @@ class Consumer(object):
         io_loop.start()
 
     def on_recv(self, multipart_message):
-        message = multipart_message[0]
+        message = self._deserialize(multipart_message[0])
         print datetime.now(), message
-        self.push_sock.send(message)
+        if self.delay > 0:
+            time.sleep(self.delay)
+        message['type'] = 'result'
+        message['result'] = None
+        self.push_sock.send(self._serialize(message))
 
+    def _serialize(self, message):
+        return jsonapi.dumps(message)
+
+    def _deserialize(self, message):
+        return jsonapi.loads(message)
 
 class Producer(Process):
     def __init__(self, rep_uri_prefix, pub_uri_prefix):
@@ -109,7 +119,6 @@ class Producer(Process):
             response['type'] = 'async'
             serialized_response = self._serialize(response)
             self.push_sock.send(serialized_response)
-            print '[push_sock] send:', serialized_response
             response['type'] = 'ack'
         serialized_response = self._serialize(response)
         self.rep_sock.send(serialized_response)
@@ -119,3 +128,12 @@ class Producer(Process):
 
     def _deserialize(self, message):
         return jsonapi.loads(message)
+
+
+def get_uris(sock):
+    uris = {}
+    for uri_label in ('rep', 'push', 'pull', 'pub'):
+        sock.send_json({"command": '%s_uri' % uri_label})
+        response = sock.recv_json()
+        uris[uri_label] = response['result']
+    return uris
