@@ -1,4 +1,7 @@
+import functools
 from threading import Thread
+from datetime import datetime
+from pprint import pprint
 import time
 try:
     from multiprocessing import Process
@@ -100,6 +103,34 @@ class SocketGroupDevice(DeferredSocketGroup):
     """
     context_factory = zmq.Context.instance
 
+    def __init__(self, *args, **kwargs):
+        periodic_callbacks = kwargs.pop('periodic_callbacks', None)
+        if periodic_callbacks is None:
+            self._periodic_callbacks = OrderedDict()
+        else:
+            self._periodic_callbacks = OrderedDict(periodic_callbacks.items())
+        super(SocketGroupDevice, self).__init__(*args, **kwargs)
+
+    def set_periodic_callback(self, label, callback_defn):
+        assert(isinstance(callback_defn, tuple) and len(callback_defn) == 2)
+        self._periodic_callbacks[label] = callback_defn
+        return self
+
+    def _setup_periodic_callbacks(self, io_loop):
+        return self.create_periodic_callbacks(self._periodic_callbacks, io_loop)
+
+    def create_periodic_callbacks(self, callback_defns, io_loop):
+        periodic_callbacks = OrderedDict()
+        for label, (callback, period_ms) in callback_defns.items():
+            wrapped = functools.partial(callback, self)
+            periodic_callback = PeriodicCallback(
+                    lambda *args, **kwargs: wrapped(*args, **kwargs),
+                    period_ms, io_loop)
+            periodic_callbacks[label] = periodic_callback
+        for callback in periodic_callbacks.values():
+            callback.start()
+        return periodic_callbacks
+
     def _setup_streams(self, socks, io_loop):
         streams = self.create_streams(socks, io_loop)
         return streams
@@ -122,9 +153,9 @@ class SocketGroupDevice(DeferredSocketGroup):
         Thread.
         """
         self.context = self.context_factory()
-
         self.socks = self._setup_sockets(self.context)
         self.io_loop = self._setup_loop()
+        self.periodic_callbacks = self._setup_periodic_callbacks(self.io_loop)
         self.streams = self._setup_streams(self.socks, self.io_loop)
         self._setup_loop_after_streams()
 
