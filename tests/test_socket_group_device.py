@@ -3,7 +3,6 @@ from socket_group import SocketGroupDevice, ProcessSocketGroupDevice, DeferredSo
 
 class TestDeviceMixin(object):
     def _setup_loop_after_streams(self):
-        print '[TestDeviceMixin] _setup_loop_after_streams'
         if not hasattr(self, 'callbacks'):
             self.callbacks = {}
             callback = PeriodicCallback(self.do_event, 1000, self.io_loop)
@@ -16,8 +15,6 @@ class TestDeviceMixin(object):
         out_message = 'hello world %s' % datetime.now()
         print 'PING: %s' % out_message
         self.socks['req'].send(out_message)
-        in_message = self.socks['req'].recv_multipart()
-        print 'PONG: %s' % ''.join(in_message)
 
 class TestDevice(TestDeviceMixin, SocketGroupDevice):
     pass
@@ -33,9 +30,16 @@ if __name__ == '__main__':
 
     print 'Create process'
     s = TestDeviceProcess()
-    s.set_sock('req', DeferredSocket(zmq.REQ)
+
+    def pong(self, multipart_message):
+        print 'PONG:', multipart_message[0], self.socks['req']
+
+    s.set_sock('req',
+        DeferredSocket(zmq.REQ)
                .connect('ipc://ECHO:1')
-               .stream_callback('on_recv', lambda *args, **kwargs: pprint(args, kwargs)))
+               .stream_callback('on_recv', pong)
+    )
+
     try:
         s.start()
         s.join()

@@ -83,7 +83,14 @@ class DeferredSocketGroup(object):
                 for stream_event, callback in s.stream_callbacks:
                     # Register callback for stream event
                     #   e.g., stream_event='on_recv'
-                    getattr(streams[label], stream_event)(callback)
+                    f = getattr(streams[label], stream_event)
+
+                    # Prepend `self` to `args` list for `callback`, to allow
+                    # callback targets to use the context of the containing
+                    # group, i.e., access the created sockets, etc.  This is
+                    # particularly useful when running the IOLoop in a thread
+                    # or process.
+                    f(lambda *args, **kwargs: callback(self, *args, **kwargs))
         return streams
 
 
