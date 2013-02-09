@@ -15,16 +15,26 @@ class Consumer(object):
         self.push_uri = push_uri
         self.delay = delay
 
-    def run(self):
-        self.ctx = zmq.Context.instance()
-        self.pull_sock = zmq.Socket(self.ctx, zmq.PULL)
-        self.pull_sock.connect(self.pull_uri)
-        self.push_sock = zmq.Socket(self.ctx, zmq.PUSH)
-        self.push_sock.connect(self.push_uri)
+    def _init_socks(self, ctx):
+        self.pull_sock = zmq.Socket(ctx, zmq.PULL)
+        self.pull_sock.bind(self.pull_uri)
+        self.push_sock = zmq.Socket(ctx, zmq.PUSH)
+        self.push_sock.bind(self.push_uri)
+        print 'pulling from:', self.pull_uri
+        print 'pushing to:', self.push_uri
 
-        io_loop = IOLoop.instance()
+    def _init_streams(self, io_loop):
         stream = ZMQStream(self.pull_sock, io_loop)
         stream.on_recv(self.on_recv)
+        self._streams.append(stream)
+
+    def run(self):
+        ctx = zmq.Context.instance()
+        self._streams = []
+        self._init_socks(ctx)
+
+        io_loop = IOLoop.instance()
+        self._init_streams(io_loop)
         try:
             io_loop.start()
         except KeyboardInterrupt:
@@ -44,6 +54,33 @@ class Consumer(object):
 
     def _deserialize(self, message):
         return jsonapi.loads(message)
+
+
+class AsyncServer(Consumer):
+    def __init__(self, pull_uri, push_uri, req_uri, delay=0):
+        super(AsyncServer, self).__init__(pull_uri, push_uri, delay=delay)
+        self.req_uri = req_uri
+
+    def _init_socks(self, ctx):
+        super(AsyncServer, self)._init_socks(ctx)
+        self.req_sock = zmq.Socket(ctx, zmq.REQ)
+        self.req_sock.connect(self.req_uri)
+        print 'using server:', self.req_uri
+
+    def _init_streams(self, io_loop):
+        super(AsyncServer, self)._init_streams(io_loop)
+        stream = ZMQStream(self.req_sock, io_loop)
+        stream.on_recv(self.on_response)
+        self._streams.append(stream)
+
+    def on_response(self, multipart_message):
+        print '[on_response] got message:', multipart_message
+        self.push_sock.send_multipart(multipart_message)
+
+    def on_recv(self, multipart_message):
+        print '[on_recv] got message:', multipart_message
+        self.req_sock.send_multipart(multipart_message)
+
 
 class Producer(Process):
     def __init__(self, rep_uri_prefix, pub_uri_prefix):
