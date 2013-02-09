@@ -16,7 +16,8 @@ Note:
 from collections import OrderedDict
 
 import zmq
-from zmq.eventloop.ioloop import IOLoop
+from zmq.eventloop.ioloop import IOLoop, PeriodicCallback
+from zmq.eventloop.zmqstream import ZMQStream
 
 
 class DeferredSocket(object):
@@ -25,6 +26,7 @@ class DeferredSocket(object):
         self.binds = []
         self.connects = []
         self.sockopts = []
+        self.stream_callbacks = []
 
     def bind(self, addr):
         self.binds.append(addr)
@@ -38,13 +40,12 @@ class DeferredSocket(object):
         self.sockopts.append((attr, value))
         return self
 
+    def stream_callback(self, stream_event, callback):
+        self.stream_callbacks.append((stream_event, callback))
+        return self
 
-class SocketGroup(object):
-    """
-    A Threadsafe set of 0MQ sockets.
-    """
-    context_factory = zmq.Context.instance
 
+class DeferredSocketGroup(object):
     def __init__(self, deferred_socks=None):
         if deferred_socks is None:
             self._deferred_socks = OrderedDict()
@@ -54,11 +55,7 @@ class SocketGroup(object):
     def set_sock(self, label, deferred_sock):
         self._deferred_socks[label] = deferred_sock
 
-    def _setup_sockets(self):
-        ctx = self.context_factory()
-
-        self._context = ctx
-
+    def create_sockets(self, ctx):
         socks = OrderedDict()
 
         for label, deferred_sock in self._deferred_socks.iteritems():
@@ -78,17 +75,54 @@ class SocketGroup(object):
                 socks[label].connect(connect_uri)
         return socks
 
+    def create_streams(self, socks, io_loop):
+        streams = OrderedDict()
+        for label, s in self._deferred_socks.iteritems():
+            if label in socks and s.stream_callbacks:
+                streams[label] = ZMQStream(socks[label], io_loop)
+                for stream_event, callback in s.stream_callbacks:
+                    # Register callback for stream event
+                    #   e.g., stream_event='on_recv'
+                    getattr(streams[label], stream_event)(callback)
+        return streams
+
+
+class SocketGroupDevice(DeferredSocketGroup):
+    """
+    A Threadsafe set of 0MQ sockets.
+    """
+    context_factory = zmq.Context.instance
+
+    def _setup_streams(self, socks, io_loop):
+        streams = self.create_streams(socks, io_loop)
+        return streams
+
+    def _setup_sockets(self, ctx):
+        socks = self.create_sockets(ctx)
+        return socks
+
+    def _setup_loop(self):
+        io_loop = IOLoop.instance()
+        return io_loop
+
+    def _setup_loop_after_streams(self):
+        pass
+
     def run(self):
         """The runner method.
 
         Do not call me directly, instead call ``self.start()``, just like a
         Thread.
         """
-        self.socks = self._setup_sockets()
-        io_loop = IOLoop.instance()
-        self._init_streams(io_loop)
+        self.context = self.context_factory()
+
+        self.socks = self._setup_sockets(self.context)
+        self.io_loop = self._setup_loop()
+        self.streams = self._setup_streams(self.socks, self.io_loop)
+        self._setup_loop_after_streams()
+
         try:
-            io_loop.start()
+            self.io_loop.start()
         except KeyboardInterrupt:
             pass
         self.done = True
@@ -108,11 +142,15 @@ class SocketGroup(object):
             toc = time.time()
 
 
-class BackgroundSocketGroup(SocketGroup):
-    """Base class for launching Devices in background processes and threads."""
+class BackgroundSocketGroupDevice(SocketGroupDevice):
+    """Base class for launching SocketGroupDevices in background processes and threads."""
 
     launcher=None
     _launch_class=None
+
+    def __init__(self, *args, **kwargs):
+        super(BackgroundSocketGroupDevice, self).__init__(*args, **kwargs)
+        self.daemon = True
 
     def start(self):
         self.launcher = self._launch_class(target=self.run)
@@ -123,7 +161,7 @@ class BackgroundSocketGroup(SocketGroup):
         return self.launcher.join(timeout=timeout)
 
 
-class ThreadDevice(BackgroundSocketGroup):
+class ThreadSocketGroupDevice(BackgroundSocketGroupDevice):
     """A SocketGroup that will be run in a background Thread.
 
     See SocketGroup for details.
@@ -131,11 +169,10 @@ class ThreadDevice(BackgroundSocketGroup):
     _launch_class=Thread
 
 
-class ProcessSocketGroup(BackgroundSocketGroup):
+class ProcessSocketGroupDevice(BackgroundSocketGroupDevice):
     """A SocketGroup that will be run in a background Process.
 
     See SocketGroup for details.
     """
     _launch_class=Process
     context_factory = zmq.Context
-
