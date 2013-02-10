@@ -1,8 +1,8 @@
 import functools
 from threading import Thread
 from datetime import datetime
-from pprint import pprint
 import time
+import logging
 try:
     from multiprocessing import Process
 except ImportError:
@@ -80,13 +80,14 @@ class DeferredSocketGroup(object):
 
     def create_streams(self, socks, io_loop):
         streams = OrderedDict()
-        print '[create_streams] socks =', socks
+        logging.debug('[create_streams] socks = %s' % socks)
         for label, s in self._deferred_socks.iteritems():
             if label in socks and s.stream_callbacks:
                 sock = socks[label]
                 stream = ZMQStream(sock, io_loop)
                 for stream_event, callback in s.stream_callbacks:
-                    print '[create_streams]', label, stream, stream_event, callback
+                    logging.debug('[create_streams] %s %s %s %s' % (
+                            label, stream, stream_event, callback))
                     # Register callback for stream event
                     #   e.g., stream_event='on_recv'
                     f = getattr(stream, stream_event)
