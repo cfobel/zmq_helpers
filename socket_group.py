@@ -221,6 +221,44 @@ class ProcessSocketGroupDevice(BackgroundSocketGroupDevice):
     context_factory = zmq.Context
 
 
+def create_sockets(ctx, deferred_socks):
+    socks = OrderedDict()
+
+    for label, deferred_sock in deferred_socks.iteritems():
+        socks[label] = zmq.Socket(ctx, deferred_sock.sock_type)
+
+    # set sockopts (must be done first, in case of zmq.IDENTITY)
+    for label, s in deferred_socks.iteritems():
+        for opt, value in s.sockopts:
+            socks[label].setsockopt(opt, value)
+
+    for label, s in deferred_socks.iteritems():
+        for bind_uri in s.binds:
+            socks[label].bind(bind_uri)
+
+    for label, s in deferred_socks.iteritems():
+        for connect_uri in s.connects:
+            socks[label].connect(connect_uri)
+    return socks
+
+
+def create_streams(deferred_socks, socks, io_loop):
+    streams = OrderedDict()
+    logging.debug('[create_streams] socks = %s' % socks)
+    for label, s in deferred_socks.iteritems():
+        if label in socks and s.stream_callbacks:
+            sock = socks[label]
+            stream = ZMQStream(sock, io_loop)
+            for stream_event, callback in s.stream_callbacks:
+                logging.debug('[create_streams] %s %s %s %s' % (
+                        label, stream, stream_event, callback))
+                # Register callback for stream event
+                #   e.g., stream_event='on_recv'
+                getattr(stream, stream_event)(callback)
+            streams[label] = stream
+    return streams
+
+
 def get_echo_server(bind_uri):
     # Configure server
     #    The server simply echoes any message received, by sending the same

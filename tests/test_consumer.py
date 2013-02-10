@@ -9,7 +9,7 @@ import zmq
 from zmq.eventloop.zmqstream import ZMQStream
 
 from socket_group import ProcessSocketGroupDevice, DeferredSocket,\
-        get_echo_server, IOLoop
+        get_echo_server, IOLoop, create_sockets, create_streams
 
 
 def get_consumer(delay=0):
@@ -68,37 +68,16 @@ def get_client():
     return client
 
 
-def get_socks(ctx, sock_configs):
-    socks = OrderedDict()
-    for label, sock_config in sock_configs.items():
-        socks[label] = zmq.Socket(ctx, sock_config['sock_type'])
-        if 'connect_uri' in sock_config:
-            socks[label].connect(sock_config['connect_uri'])
-        elif 'bind_uri' in sock_config:
-            socks[label].bind(sock_config['bind_uri'])
-        else:
-            raise ValueError, 'Must specify either connect_uri or bind_uri'
-    return socks
-
-
 def run_producer():
     ctx = zmq.Context.instance()
 
     io_loop = IOLoop.instance()
-    sock_configs = OrderedDict([
-        ('push', {'sock_type': zmq.PUSH, 'connect_uri': 'ipc://CONSUMER_TEST_PULL_BE:1'}),
-        ('pull', {'sock_type': zmq.PULL, 'connect_uri': 'ipc://CONSUMER_TEST_PUSH_BE:1'}),
-        ('rep', {'sock_type': zmq.REP, 'bind_uri': 'ipc://PRODUCER_REP:1'}),
-        ('sub', {'sock_type': zmq.PUB, 'bind_uri': 'ipc://PRODUCER_PUB:1'}),
-    ])
-
-    socks = get_socks(ctx, sock_configs)
 
     def process_response(stream, multipart_message):
         logging.debug('[PRODUCER:process_response] %s %s' % (stream,
                                                              multipart_message,
                                                              ))
-        socks['sub'].send_multipart(multipart_message)
+        socks['pub'].send_multipart(multipart_message)
 
     def process_request(stream, multipart_message):
         logging.debug('[PRODUCER:process_request] %s %s' % (stream,
@@ -108,19 +87,20 @@ def run_producer():
         socks['rep'].send_multipart([async_id] + multipart_message)
         socks['push'].send_multipart([async_id] + multipart_message)
 
-    stream_callbacks = OrderedDict([
-        ('pull', process_response),
-        ('rep', process_request)
+    sock_configs = OrderedDict([
+        ('push', DeferredSocket(zmq.PUSH).connect('ipc://CONSUMER_TEST_PULL_BE:1')),
+        ('pull', DeferredSocket(zmq.PULL)
+                    .connect('ipc://CONSUMER_TEST_PUSH_BE:1')
+                    .stream_callback('on_recv_stream', process_response)
+        ),
+        ('rep', DeferredSocket(zmq.REP)
+                    .bind('ipc://PRODUCER_REP:1')
+                    .stream_callback('on_recv_stream', process_request)
+        ),
+        ('pub', DeferredSocket(zmq.PUB).bind('ipc://PRODUCER_PUB:1')),
     ])
-
-    streams = []
-    for label, sock in socks.items():
-        if label in stream_callbacks:
-            stream = ZMQStream(sock, io_loop)
-            f = getattr(stream, 'on_recv_stream')
-            #stream.on_recv_stream(callback)
-            f(stream_callbacks[label])
-            streams.append(stream)
+    socks = create_sockets(ctx, sock_configs)
+    streams = create_streams(sock_configs, socks, io_loop)
 
     try:
         io_loop.start()
