@@ -6,7 +6,7 @@ import zmq
 
 from socket_group import DeferredSocket, EchoServer, get_run_context,\
         PeriodicCallback
-from async_task_queue import Consumer, JsonProducer, get_uris
+from async_task_queue import AsyncJsonServerAdapter, get_uris
 
 
 class Client(object):
@@ -65,31 +65,21 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
     echo_server = Process(target=EchoServer('ipc://ECHO:1', ).run)
-    consumer = Process(target=Consumer('ipc://ECHO:1',
-                                       'ipc://CONSUMER_TEST_PUSH_BE:1',
-                                       'ipc://CONSUMER_TEST_PULL_BE:1',
-                                       0.5).run
-    )
-    producer = Process(target=JsonProducer(
-            'ipc://PRODUCER_REP:1',
-            'ipc://PRODUCER_PUB:1',
-            'ipc://CONSUMER_TEST_PULL_BE:1',
-            'ipc://CONSUMER_TEST_PUSH_BE:1').run
-    )
     client = Process(target=JsonClient('ipc://PRODUCER_REP:1',
                                    'ipc://PRODUCER_PUB:1').run)
+    async_server_adapter = Process(
+        target=AsyncJsonServerAdapter('ipc://ECHO:1', 'ipc://PRODUCER_REP:1',
+                                  'ipc://PRODUCER_PUB:1').run
+    )
 
     try:
         echo_server.start()
-        consumer.start()
-        producer.start()
+        async_server_adapter.start()
         client.start()
         client.join()
-        producer.join()
-        consumer.join()
+        async_server_adapter.join()
         echo_server.join()
     except KeyboardInterrupt:
-        producer.terminate()
+        async_server_adapter.terminate()
         client.terminate()
-        consumer.terminate()
         echo_server.terminate()

@@ -7,8 +7,6 @@ import logging
 
 import zmq
 from zmq.utils import jsonapi
-from zmq.eventloop.ioloop import IOLoop
-from zmq.eventloop.zmqstream import ZMQStream
 
 from socket_group import DeferredSocket, SockConfigsTask
 
@@ -137,6 +135,46 @@ class JsonProducer(Producer):
             response['async_id'] = async_id
             socks['push'].send_multipart([async_id] + multipart_message)
         socks['rep'].send_json(response)
+
+
+class AsyncServerAdapter(object):
+    producer_class = Producer
+
+    def __init__(self, backend_rep_uri, frontend_rep_uri, frontend_pub_uri):
+        unique_ipc_uri = lambda: 'ipc://' + uuid4().hex
+        self.uris = OrderedDict([
+            ('backend_rep', backend_rep_uri),
+            ('consumer_push_be', unique_ipc_uri()),
+            ('consumer_pull_be', unique_ipc_uri()),
+            ('frontend_rep_uri', frontend_rep_uri),
+            ('frontend_pub_uri', frontend_pub_uri)
+        ])
+        logging.info("uris: %s", self.uris)
+
+    def run(self):
+        consumer = Process(target=Consumer(self.uris['backend_rep'],
+                                        self.uris['consumer_push_be'],
+                                        self.uris['consumer_pull_be'],
+                                        0.5).run
+        )
+        producer = Process(target=self.producer_class(
+                self.uris['frontend_rep_uri'],
+                self.uris['frontend_pub_uri'],
+                self.uris['consumer_pull_be'],
+                self.uris['consumer_push_be']).run
+        )
+        try:
+            consumer.start()
+            producer.start()
+            producer.join()
+            consumer.join()
+        except KeyboardInterrupt:
+            producer.terminate()
+            consumer.terminate()
+
+
+class AsyncJsonServerAdapter(AsyncServerAdapter):
+    producer_class = JsonProducer
 
 
 def get_uris(sock):
