@@ -115,12 +115,18 @@ if __name__ == '__main__':
 
     producer = Process(target=run_producer)
 
-    echo_server.start()
-    consumer.start()
-    time.sleep(0.2)
-    producer.start()
-    client.start()
-    client.join()
-    producer.join()
-    consumer.join()
-    echo_server.join()
+    try:
+        echo_server.start()
+        consumer.start()
+        time.sleep(0.2)
+        producer.start()
+        client.start()
+        client.join()
+        producer.join()
+        consumer.join()
+        echo_server.join()
+    except KeyboardInterrupt:
+        producer.terminate()
+        client.launcher.terminate()
+        consumer.launcher.terminate()
+        echo_server.launcher.terminate()
