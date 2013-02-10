@@ -82,11 +82,13 @@ class DeferredSocketGroup(object):
         streams = OrderedDict()
         for label, s in self._deferred_socks.iteritems():
             if label in socks and s.stream_callbacks:
-                streams[label] = ZMQStream(socks[label], io_loop)
+                sock = socks[label]
+                stream = ZMQStream(sock, io_loop)
                 for stream_event, callback in s.stream_callbacks:
+                    print '[create_streams]', label, sock, stream, stream_event, callback
                     # Register callback for stream event
                     #   e.g., stream_event='on_recv'
-                    f = getattr(streams[label], stream_event)
+                    f = getattr(stream, stream_event)
 
                     # Prepend `self` to `args` list for `callback`, to allow
                     # callback targets to use the context of the containing
@@ -94,6 +96,7 @@ class DeferredSocketGroup(object):
                     # particularly useful when running the IOLoop in a thread
                     # or process.
                     f(lambda *args, **kwargs: callback(self, *args, **kwargs))
+                streams[label] = stream
         return streams
 
 
@@ -214,3 +217,19 @@ class ProcessSocketGroupDevice(BackgroundSocketGroupDevice):
     """
     _launch_class=Process
     context_factory = zmq.Context
+
+
+def get_echo_server(bind_uri):
+    # Configure server
+    #    The server simply echoes any message received, by sending the same
+    #    message back as a response.
+    def echo(self, multipart_message):
+        self.socks['rep'].send_multipart(multipart_message)
+
+    server = ProcessSocketGroupDevice()
+    server.set_sock('rep',
+        DeferredSocket(zmq.REP)
+               .bind(bind_uri)
+               .stream_callback('on_recv', echo)
+    )
+    return server

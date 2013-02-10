@@ -2,23 +2,7 @@ from datetime import datetime
 
 import zmq
 
-from socket_group import ProcessSocketGroupDevice, DeferredSocket
-
-
-def get_server():
-    # Configure server
-    #    The server simply echoes any message received, by sending the same
-    #    message back as a response.
-    def echo(self, multipart_message):
-        self.socks['rep'].send_multipart(multipart_message)
-
-    server = ProcessSocketGroupDevice()
-    server.set_sock('rep',
-        DeferredSocket(zmq.REP)
-               .bind('ipc://ECHO:1')
-               .stream_callback('on_recv', echo)
-    )
-    return server
+from socket_group import ProcessSocketGroupDevice, DeferredSocket, get_echo_server
 
 
 def get_client():
@@ -44,7 +28,7 @@ def get_client():
 
 
 if __name__ == '__main__':
-    server = get_server()
+    server = get_echo_server('ipc://ECHO:1')
     client = get_client()
     try:
         server.start()
