@@ -38,38 +38,33 @@ def get_consumer(delay=0):
     return consumer
 
 
-def ___run_producer():
-    producer = ProcessSocketGroupDevice()
+def get_client():
+    client = ProcessSocketGroupDevice()
 
-    def process_response(stream, multipart_message):
-        logging.debug('[PRODUCER:process_response] %s %s' % (stream,
+    def process_response(self, stream, multipart_message):
+        logging.debug('[CLIENT:process_response] %s %s' % (stream,
                                                              multipart_message,
                                                              ))
 
-    def process_request(self, stream, multipart_message):
-        logging.debug('[PRODUCER:process_request] %s %s' % (stream,
-                                                            multipart_message,
-                                                            ))
-        self.socks['rep'].send_multipart(multipart_message + ['ack'])
-        self.socks['push'].send_multipart(multipart_message)
+    def do_request(self):
+        self.socks['req'].send_multipart(['hello world'])
+        response = self.socks['req'].recv_multipart()
+        logging.debug('[CLIENT:do_request] %s' % response)
 
-    producer.set_sock('pull',
-        DeferredSocket(zmq.PULL)
-            .connect('ipc://CONSUMER_TEST_PUSH_BE:1')
+    client.set_sock('req',
+        DeferredSocket(zmq.REQ)
+            .connect('ipc://PRODUCER_REP:1')
+    )
+
+    client.set_periodic_callback('do_request', (do_request, 1000))
+
+    client.set_sock('sub',
+        DeferredSocket(zmq.SUB)
+            .connect('ipc://PRODUCER_PUB:1')
+            .setsockopt(zmq.SUBSCRIBE, '')
             .stream_callback('on_recv_stream', process_response)
     )
-
-    producer.set_sock('rep',
-        DeferredSocket(zmq.REP)
-            .bind('ipc://PRODUCER_REP:1')
-            .stream_callback('on_recv_stream', process_request)
-    )
-
-    producer.set_sock('push',
-        DeferredSocket(zmq.PUSH)
-            .connect('ipc://CONSUMER_TEST_PULL_BE:1')
-    )
-    return producer
+    return client
 
 
 def run_producer():
@@ -115,7 +110,8 @@ def run_producer():
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
     echo_server = get_echo_server('ipc://ECHO:1')
-    consumer = get_consumer(0.5)
+    consumer = get_consumer(0.2)
+    client = get_client()
 
     producer = Process(target=run_producer)
 
@@ -123,6 +119,8 @@ if __name__ == '__main__':
     consumer.start()
     time.sleep(0.2)
     producer.start()
+    client.start()
+    client.join()
     producer.join()
     consumer.join()
     echo_server.join()
