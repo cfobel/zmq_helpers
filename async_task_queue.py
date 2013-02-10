@@ -6,9 +6,11 @@ from collections import OrderedDict
 import logging
 
 import zmq
+from zmq.eventloop.ioloop import IOLoop, PeriodicCallback
 from zmq.utils import jsonapi
 
 from socket_group import DeferredSocket, SockConfigsTask
+from utils import cleanup_ipc_uris, log_label
 
 
 class Consumer(SockConfigsTask):
@@ -36,8 +38,8 @@ class Consumer(SockConfigsTask):
             self.sock_configs['pull'].connect(pull_uri)
 
     def process_input(self, socks, streams, stream, multipart_message):
-        logging.debug('[CONSUMER:process_input] %s %s' % (stream,
-                                                          multipart_message, ))
+        logging.getLogger(log_label(self)).debug(
+                '%s %s' % (stream, multipart_message,))
         async_id = multipart_message[0]
         message = multipart_message[1:]
         socks['req'].send_multipart(message)
@@ -45,7 +47,8 @@ class Consumer(SockConfigsTask):
         if self.delay > 0:
             time.sleep(self.delay)
         socks['push'].send_multipart([async_id] + response)
-        logging.debug('  \--> req response: %s' % response)
+        logging.getLogger(log_label(self)).debug(
+                '  \--> req response: %s' % response)
 
 
 class Producer(SockConfigsTask):
@@ -79,15 +82,13 @@ class Producer(SockConfigsTask):
             self.sock_configs['pull'].connect(pull_uri)
 
     def process_response(self, socks, streams, stream, multipart_message):
-        logging.debug('[PRODUCER:process_response] %s %s' % (stream,
-                                                             multipart_message,
-                                                             ))
+        logging.getLogger(log_label(self)).debug('%s %s' % (stream,
+                                                            multipart_message,))
         socks['pub'].send_multipart(multipart_message)
 
     def process_request(self, socks, streams, stream, multipart_message):
-        logging.debug('[PRODUCER:process_request] %s %s' % (stream,
-                                                            multipart_message,
-                                                            ))
+        logging.getLogger(log_label(self)).debug('%s %s' % (stream,
+                                                            multipart_message,))
         async_id = '[%s] %s' % (datetime.now(), uuid4())
         socks['rep'].send_multipart([async_id] + multipart_message)
         socks['push'].send_multipart([async_id] + multipart_message)
@@ -99,9 +100,8 @@ class JsonProducer(Producer):
         Extract async_id from first frame of the message, strip the first frame
         from the message, and embed the id into the JSON-encoded message.
         '''
-        logging.debug('[JSON_PRODUCER:process_response] %s %s' % (stream,
-                                                             multipart_message,
-                                                             ))
+        logging.getLogger(log_label(self)).debug('%s %s' % (stream,
+                                                            multipart_message,))
         # multipart_message should have two parts: 1) async_id, 2) JSON-message
         assert(len(multipart_message) == 2)
         async_id = multipart_message[0]
@@ -119,9 +119,8 @@ class JsonProducer(Producer):
                 result).  The result will be published to the PUB socket once
                 the request has been processed.
         '''
-        logging.debug('[JSON_PRODUCER:process_request] %s %s' % (stream,
-                                                            multipart_message,
-                                                            ))
+        logging.getLogger(log_label(self)).debug('%s %s' % (stream,
+                                                            multipart_message,))
         assert(len(multipart_message) == 1)
         request = jsonapi.loads(multipart_message[0])
         response = request.copy()
@@ -137,11 +136,15 @@ class JsonProducer(Producer):
         socks['rep'].send_json(response)
 
 
+def unique_ipc_uri():
+    return 'ipc://' + uuid4().hex
+
+
 class AsyncServerAdapter(object):
     producer_class = Producer
 
-    def __init__(self, backend_rep_uri, frontend_rep_uri, frontend_pub_uri):
-        unique_ipc_uri = lambda: 'ipc://' + uuid4().hex
+    def __init__(self, backend_rep_uri, frontend_rep_uri, frontend_pub_uri,
+                 control_pipe=None):
         self.uris = OrderedDict([
             ('backend_rep', backend_rep_uri),
             ('consumer_push_be', unique_ipc_uri()),
@@ -149,13 +152,21 @@ class AsyncServerAdapter(object):
             ('frontend_rep_uri', frontend_rep_uri),
             ('frontend_pub_uri', frontend_pub_uri)
         ])
-        logging.info("uris: %s", self.uris)
+        self.control_pipe = control_pipe
+        self.done = False
+        logging.getLogger(log_label(self)).info("uris: %s", self.uris)
+
+    def watchdog(self):
+        if self.control_pipe is None:
+            return
+        elif not self.done and self.control_pipe.poll():
+            self.done = True
+            self.finish()
 
     def run(self):
         consumer = Process(target=Consumer(self.uris['backend_rep'],
                                         self.uris['consumer_push_be'],
-                                        self.uris['consumer_pull_be'],
-                                        0.5).run
+                                        self.uris['consumer_pull_be']).run
         )
         producer = Process(target=self.producer_class(
                 self.uris['frontend_rep_uri'],
@@ -163,14 +174,28 @@ class AsyncServerAdapter(object):
                 self.uris['consumer_pull_be'],
                 self.uris['consumer_push_be']).run
         )
+        self.io_loop = IOLoop.instance()
+        periodic_callback = PeriodicCallback(self.watchdog, 500, self.io_loop)
+        periodic_callback.start()
         try:
             consumer.start()
             producer.start()
-            producer.join()
-            consumer.join()
+            self.io_loop.start()
         except KeyboardInterrupt:
-            producer.terminate()
-            consumer.terminate()
+            pass
+        producer.terminate()
+        consumer.terminate()
+        logging.getLogger(log_label(self)).info('PRODUCER and CONSUMER have '
+                                                'been terminated')
+
+    def __del__(self):
+        uris = [self.uris[label] for label in ('consumer_push_be',
+                                               'consumer_pull_be', )]
+        cleanup_ipc_uris(uris)
+
+    def finish(self):
+        logging.getLogger(log_label(self)).debug('"finish" request received')
+        self.io_loop.stop()
 
 
 class AsyncJsonServerAdapter(AsyncServerAdapter):

@@ -1,5 +1,4 @@
 import functools
-from threading import Thread
 import time
 import logging
 try:
@@ -18,8 +17,10 @@ Note:
 from collections import OrderedDict
 
 import zmq
-from zmq.eventloop.ioloop import IOLoop, PeriodicCallback
+from zmq.eventloop.ioloop import IOLoop
 from zmq.eventloop.zmqstream import ZMQStream
+
+from utils import log_label
 
 
 class DeferredSocket(object):
@@ -75,13 +76,13 @@ def create_sockets(ctx, deferred_socks):
 
 def create_streams(deferred_socks, socks, io_loop):
     streams = OrderedDict()
-    logging.debug('[create_streams] socks = %s' % socks)
+    logging.getLogger(log_label()).debug('socks = %s' % socks)
     for label, s in deferred_socks.iteritems():
         if label in socks and s.stream_callbacks:
             sock = socks[label]
             stream = ZMQStream(sock, io_loop)
             for stream_event, callback in s.stream_callbacks:
-                logging.debug('[create_streams] %s %s %s %s' % (
+                logging.getLogger(log_label()).debug('%s %s %s %s' % (
                         label, stream, stream_event, callback))
                 # Register callback for stream event
                 #   e.g., stream_event='on_recv'
