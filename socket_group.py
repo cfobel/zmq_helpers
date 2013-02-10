@@ -80,12 +80,13 @@ class DeferredSocketGroup(object):
 
     def create_streams(self, socks, io_loop):
         streams = OrderedDict()
+        print '[create_streams] socks =', socks
         for label, s in self._deferred_socks.iteritems():
             if label in socks and s.stream_callbacks:
                 sock = socks[label]
                 stream = ZMQStream(sock, io_loop)
                 for stream_event, callback in s.stream_callbacks:
-                    print '[create_streams]', label, sock, stream, stream_event, callback
+                    print '[create_streams]', label, stream, stream_event, callback
                     # Register callback for stream event
                     #   e.g., stream_event='on_recv'
                     f = getattr(stream, stream_event)
@@ -143,7 +144,7 @@ class SocketGroupDevice(DeferredSocketGroup):
         return socks
 
     def _setup_loop(self):
-        io_loop = IOLoop.instance()
+        io_loop = IOLoop()
         return io_loop
 
     def _setup_loop_after_streams(self):
@@ -160,7 +161,7 @@ class SocketGroupDevice(DeferredSocketGroup):
         self.io_loop = self._setup_loop()
         self.periodic_callbacks = self._setup_periodic_callbacks(self.io_loop)
         self.streams = self._setup_streams(self.socks, self.io_loop)
-        self._setup_loop_after_streams()
+        #self._setup_loop_after_streams()
 
         try:
             self.io_loop.start()
