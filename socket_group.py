@@ -1,6 +1,5 @@
 import functools
 from threading import Thread
-from datetime import datetime
 import time
 import logging
 try:
@@ -254,22 +253,46 @@ def create_streams(deferred_socks, socks, io_loop):
                         label, stream, stream_event, callback))
                 # Register callback for stream event
                 #   e.g., stream_event='on_recv'
-                getattr(stream, stream_event)(callback)
+                f = functools.partial(callback, socks, streams)
+                getattr(stream, stream_event)(f)
             streams[label] = stream
     return streams
 
 
-def get_echo_server(bind_uri):
+def create_sockets_and_streams(ctx, deferred_socks, io_loop):
+    socks = create_sockets(ctx, deferred_socks)
+    streams = create_streams(deferred_socks, socks, io_loop)
+    return socks, streams
+
+
+def get_run_context(sock_configs):
+    ctx = zmq.Context.instance()
+    io_loop = IOLoop.instance()
+    socks, streams = create_sockets_and_streams(ctx, sock_configs, io_loop)
+
+    return ctx, io_loop, socks, streams
+
+
+def run_sock_configs(sock_configs):
+    ctx, io_loop, socks, streams = get_run_context(sock_configs)
+
+    try:
+        io_loop.start()
+    except KeyboardInterrupt:
+        pass
+
+
+def echo(socks, streams, multipart_message):
+    socks['rep'].send_multipart(multipart_message)
+
+
+def run_echo_server(bind_uri):
     # Configure server
     #    The server simply echoes any message received, by sending the same
     #    message back as a response.
-    def echo(self, multipart_message):
-        self.socks['rep'].send_multipart(multipart_message)
-
-    server = ProcessSocketGroupDevice()
-    server.set_sock('rep',
-        DeferredSocket(zmq.REP)
-               .bind(bind_uri)
-               .stream_callback('on_recv', echo)
-    )
-    return server
+    sock_configs = OrderedDict([
+            ('rep', DeferredSocket(zmq.REP)
+                        .bind(bind_uri)
+                        .stream_callback('on_recv', echo))
+    ])
+    run_sock_configs(sock_configs)

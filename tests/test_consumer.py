@@ -6,80 +6,59 @@ import logging
 from collections import OrderedDict
 
 import zmq
-from zmq.eventloop.zmqstream import ZMQStream
 
-from socket_group import ProcessSocketGroupDevice, DeferredSocket,\
-        get_echo_server, IOLoop, create_sockets, create_streams
+from socket_group import DeferredSocket, run_echo_server, run_sock_configs,\
+        get_run_context, PeriodicCallback, IOLoop, create_sockets_and_streams
 
 
-def get_consumer(delay=0):
-    consumer = ProcessSocketGroupDevice()
-
-    def process_input(self, stream, multipart_message):
+def run_consumer(req_uri, push_uri, pull_uri, delay=0, push_bind=True,
+                 pull_bind=True):
+    logging.debug('[run_consumer] %s' % dict(
+        req_uri=req_uri,
+        push_uri=push_uri,
+        pull_uri=pull_uri,
+        delay=delay,
+        push_bind=push_bind,
+        pull_bind=pull_bind
+    ))
+    def process_input(socks, streams, stream, multipart_message):
         logging.debug('[CONSUMER:process_input] %s %s' % (stream,
                                                           multipart_message, ))
         async_id = multipart_message[0]
         message = multipart_message[1:]
-        self.socks['req'].send_multipart(message)
-        response = self.socks['req'].recv_multipart()
+        socks['req'].send_multipart(message)
+        response = socks['req'].recv_multipart()
         if delay > 0:
             time.sleep(delay)
-        self.socks['push'].send_multipart([async_id] + response)
+        socks['push'].send_multipart([async_id] + response)
         logging.debug('  \--> req response: %s' % response)
 
-    consumer.set_sock('pull',
-        DeferredSocket(zmq.PULL)
-            .bind('ipc://CONSUMER_TEST_PULL_BE:1')
-            .stream_callback('on_recv_stream', process_input)
-    )
-    consumer.set_sock('push',
-                      DeferredSocket(zmq.PUSH)
-                            .bind('ipc://CONSUMER_TEST_PUSH_BE:1'))
-    consumer.set_sock('req', DeferredSocket(zmq.REQ) .connect('ipc://ECHO:1'))
-    return consumer
+    sock_configs = OrderedDict([
+            ('pull', DeferredSocket(zmq.PULL)
+                        .stream_callback('on_recv_stream', process_input)),
+            ('push', DeferredSocket(zmq.PUSH)),
+            ('req', DeferredSocket(zmq.REQ).connect(req_uri))
+    ])
+    if push_bind:
+        sock_configs['push'].bind(push_uri)
+    else:
+        sock_configs['push'].connect(push_uri)
+    if pull_bind:
+        sock_configs['pull'].bind(pull_uri)
+    else:
+        sock_configs['pull'].connect(pull_uri)
+    run_sock_configs(sock_configs)
 
 
-def get_client():
-    client = ProcessSocketGroupDevice()
-
-    def process_response(self, stream, multipart_message):
-        logging.debug('[CLIENT:process_response] %s %s' % (stream,
-                                                             multipart_message,
-                                                             ))
-
-    def do_request(self):
-        self.socks['req'].send_multipart(['hello world'])
-        response = self.socks['req'].recv_multipart()
-        logging.debug('[CLIENT:do_request] %s' % response)
-
-    client.set_sock('req',
-        DeferredSocket(zmq.REQ)
-            .connect('ipc://PRODUCER_REP:1')
-    )
-
-    client.set_periodic_callback('do_request', (do_request, 1000))
-
-    client.set_sock('sub',
-        DeferredSocket(zmq.SUB)
-            .connect('ipc://PRODUCER_PUB:1')
-            .setsockopt(zmq.SUBSCRIBE, '')
-            .stream_callback('on_recv_stream', process_response)
-    )
-    return client
-
-
-def run_producer():
-    ctx = zmq.Context.instance()
-
-    io_loop = IOLoop.instance()
-
-    def process_response(stream, multipart_message):
+def run_producer(rep_uri, pub_uri, push_uri, pull_uri, push_bind=False,
+        pull_bind=False):
+    def process_response(socks, streams, stream, multipart_message):
         logging.debug('[PRODUCER:process_response] %s %s' % (stream,
                                                              multipart_message,
                                                              ))
         socks['pub'].send_multipart(multipart_message)
 
-    def process_request(stream, multipart_message):
+    def process_request(socks, streams, stream, multipart_message):
         logging.debug('[PRODUCER:process_request] %s %s' % (stream,
                                                             multipart_message,
                                                             ))
@@ -88,21 +67,53 @@ def run_producer():
         socks['push'].send_multipart([async_id] + multipart_message)
 
     sock_configs = OrderedDict([
-        ('push', DeferredSocket(zmq.PUSH).connect('ipc://CONSUMER_TEST_PULL_BE:1')),
+        ('push', DeferredSocket(zmq.PUSH)),
         ('pull', DeferredSocket(zmq.PULL)
-                    .connect('ipc://CONSUMER_TEST_PUSH_BE:1')
                     .stream_callback('on_recv_stream', process_response)
         ),
         ('rep', DeferredSocket(zmq.REP)
-                    .bind('ipc://PRODUCER_REP:1')
+                    .bind(rep_uri)
                     .stream_callback('on_recv_stream', process_request)
         ),
-        ('pub', DeferredSocket(zmq.PUB).bind('ipc://PRODUCER_PUB:1')),
+        ('pub', DeferredSocket(zmq.PUB).bind(pub_uri))
     ])
-    socks = create_sockets(ctx, sock_configs)
-    streams = create_streams(sock_configs, socks, io_loop)
+
+    if push_bind:
+        sock_configs['push'].bind(push_uri)
+    else:
+        sock_configs['push'].connect(push_uri)
+    if pull_bind:
+        sock_configs['pull'].bind(pull_uri)
+    else:
+        sock_configs['pull'].connect(pull_uri)
+
+    run_sock_configs(sock_configs)
+
+
+def run_client(req_uri, sub_uri):
+    def process_response(socks, streams, stream, multipart_message):
+        logging.debug('[CLIENT:process_response] %s %s' % (stream,
+                                                             multipart_message,
+                                                             ))
+
+    def do_request():
+        socks['req'].send_multipart(['hello world'])
+        response = socks['req'].recv_multipart()
+        logging.debug('[CLIENT:do_request] %s' % response)
+
+    sock_configs = OrderedDict([
+            ('req', DeferredSocket(zmq.REQ).connect(req_uri)),
+            ('sub', DeferredSocket(zmq.SUB)
+                        .connect(sub_uri)
+                        .setsockopt(zmq.SUBSCRIBE, '')
+                        .stream_callback('on_recv_stream', process_response))
+    ])
+
+    ctx, io_loop, socks, streams = get_run_context(sock_configs)
+    periodic_callback = PeriodicCallback(do_request, 1000, io_loop)
 
     try:
+        periodic_callback.start()
         io_loop.start()
     except KeyboardInterrupt:
         pass
@@ -110,16 +121,23 @@ def run_producer():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
-    echo_server = get_echo_server('ipc://ECHO:1')
-    consumer = get_consumer(0.2)
-    client = get_client()
 
-    producer = Process(target=run_producer)
+    echo_server = Process(target=run_echo_server, args=('ipc://ECHO:1', ))
+    consumer = Process(target=run_consumer, args=(
+            'ipc://ECHO:1', 'ipc://CONSUMER_TEST_PUSH_BE:1',
+            'ipc://CONSUMER_TEST_PULL_BE:1', 0.5, ))
+    producer = Process(target=run_producer, args=(
+            'ipc://PRODUCER_REP:1',
+            'ipc://PRODUCER_PUB:1',
+            'ipc://CONSUMER_TEST_PULL_BE:1',
+            'ipc://CONSUMER_TEST_PUSH_BE:1',
+    ))
+    client = Process(target=run_client, args=('ipc://PRODUCER_REP:1',
+                                              'ipc://PRODUCER_PUB:1'))
 
     try:
         echo_server.start()
         consumer.start()
-        time.sleep(0.2)
         producer.start()
         client.start()
         client.join()
@@ -128,6 +146,6 @@ if __name__ == '__main__':
         echo_server.join()
     except KeyboardInterrupt:
         producer.terminate()
-        client.launcher.terminate()
-        consumer.launcher.terminate()
-        echo_server.launcher.terminate()
+        client.terminate()
+        consumer.terminate()
+        echo_server.terminate()
