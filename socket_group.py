@@ -282,7 +282,9 @@ def run_sock_configs(sock_configs):
         pass
 
 
-def echo(socks, streams, multipart_message):
+def echo(socks, streams, multipart_message, delay=0):
+    if delay > 0:
+        time.sleep(delay)
     socks['rep'].send_multipart(multipart_message)
 
 
@@ -290,9 +292,10 @@ def run_echo_server(bind_uri):
     # Configure server
     #    The server simply echoes any message received, by sending the same
     #    message back as a response.
+    wrapped = functools.partial(echo, delay=0.3)
     sock_configs = OrderedDict([
             ('rep', DeferredSocket(zmq.REP)
                         .bind(bind_uri)
-                        .stream_callback('on_recv', echo))
+                        .stream_callback('on_recv', wrapped))
     ])
     run_sock_configs(sock_configs)
