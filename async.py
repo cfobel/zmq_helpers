@@ -9,8 +9,8 @@ import zmq
 from zmq.eventloop.ioloop import IOLoop, PeriodicCallback
 from zmq.utils import jsonapi
 
-from socket_group import DeferredSocket, SockConfigsTask
-from utils import cleanup_ipc_uris, log_label
+from .socket_configs import DeferredSocket, SockConfigsTask
+from .utils import cleanup_ipc_uris, log_label
 
 
 class Consumer(SockConfigsTask):
