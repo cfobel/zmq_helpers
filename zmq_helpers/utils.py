@@ -1,5 +1,6 @@
 import sys
 import logging
+from uuid import uuid4
 
 from path import path
 
@@ -13,6 +14,10 @@ def log_label(obj=None, function_name=True):
     if parts[0] == '__main__':
         del parts[0]
     return '[%s]' % '.'.join(parts)
+
+
+def unique_ipc_uri():
+    return 'ipc:///tmp/' + uuid4().hex
 
 
 def cleanup_ipc_uris(uris):

@@ -12,7 +12,7 @@ from zmq.utils import jsonapi
 
 from .socket_configs import DeferredSocket, SockConfigsTask,\
         create_sockets, create_streams
-from .utils import cleanup_ipc_uris, log_label
+from .utils import cleanup_ipc_uris, log_label, unique_ipc_uri
 
 
 class Consumer(SockConfigsTask):
@@ -183,10 +183,6 @@ class JsonProducer(Producer):
             response['async_id'] = async_id
             env['socks']['push'].send_multipart([async_id] + multipart_message)
         env['socks']['rep'].send_json(response)
-
-
-def unique_ipc_uri():
-    return 'ipc://' + uuid4().hex
 
 
 class AsyncServerAdapter(object):
