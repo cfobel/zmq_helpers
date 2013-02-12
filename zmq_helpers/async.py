@@ -4,12 +4,14 @@ from uuid import uuid4
 import time
 from collections import OrderedDict
 import logging
+import functools
 
 import zmq
 from zmq.eventloop.ioloop import IOLoop, PeriodicCallback
 from zmq.utils import jsonapi
 
-from .socket_configs import DeferredSocket, SockConfigsTask
+from .socket_configs import DeferredSocket, SockConfigsTask,\
+        create_sockets, create_streams
 from .utils import cleanup_ipc_uris, log_label
 
 
@@ -37,16 +39,16 @@ class Consumer(SockConfigsTask):
         else:
             self.sock_configs['pull'].connect(pull_uri)
 
-    def process_input(self, socks, streams, stream, multipart_message):
+    def process_input(self, env, stream, multipart_message):
         logging.getLogger(log_label(self)).debug(
                 '%s %s' % (stream, multipart_message,))
         async_id = multipart_message[0]
         message = multipart_message[1:]
-        socks['req'].send_multipart(message)
-        response = socks['req'].recv_multipart()
+        env['socks']['req'].send_multipart(message)
+        response = env['socks']['req'].recv_multipart()
         if self.delay > 0:
             time.sleep(self.delay)
-        socks['push'].send_multipart([async_id] + response)
+        env['socks']['push'].send_multipart([async_id] + response)
         logging.getLogger(log_label(self)).debug(
                 '  \--> req response: %s' % response)
 
@@ -81,21 +83,21 @@ class Producer(SockConfigsTask):
         else:
             self.sock_configs['pull'].connect(pull_uri)
 
-    def process_response(self, socks, streams, stream, multipart_message):
+    def process_response(self, env, stream, multipart_message):
         logging.getLogger(log_label(self)).debug('%s %s' % (stream,
                                                             multipart_message,))
-        socks['pub'].send_multipart(multipart_message)
+        env['socks']['pub'].send_multipart(multipart_message)
 
-    def process_request(self, socks, streams, stream, multipart_message):
+    def process_request(self, env, stream, multipart_message):
         logging.getLogger(log_label(self)).debug('%s %s' % (stream,
                                                             multipart_message,))
         async_id = '[%s] %s' % (datetime.now(), uuid4())
-        socks['rep'].send_multipart([async_id] + multipart_message)
-        socks['push'].send_multipart([async_id] + multipart_message)
+        env['socks']['rep'].send_multipart([async_id] + multipart_message)
+        env['socks']['push'].send_multipart([async_id] + multipart_message)
 
 
 class JsonProducer(Producer):
-    def process_response(self, socks, streams, stream, multipart_message):
+    def process_response(self, env, stream, multipart_message):
         '''
         Extract async_id from first frame of the message, strip the first frame
         from the message, and embed the id into the JSON-encoded message.
@@ -107,9 +109,19 @@ class JsonProducer(Producer):
         async_id = multipart_message[0]
         message = jsonapi.loads(multipart_message[1])
         message['async_id'] = async_id
-        socks['pub'].send_json(message)
+        env['socks']['pub'].send_json(message)
 
-    def process_request(self, socks, streams, stream, multipart_message):
+    def process_subscribed_in(self, label, env, multipart_message):
+        '''
+        Extract set `__referrer__` field of message before forwarding the
+        message on through the `PUB` socket.
+        '''
+        message = jsonapi.loads(multipart_message[0])
+        message['__referrer__'] = label
+        logging.getLogger(log_label(self)).info('%s' % ((label, env['socks'], ), ))
+        env['socks']['pub'].send_json(message)
+
+    def process_request(self, env, stream, multipart_message):
         '''
         Generate a unique async_id and:
             1) Add it as the first frame the message before sending to the PUSH socket
@@ -128,12 +140,49 @@ class JsonProducer(Producer):
                                   'push_uri'):
             response['type'] = 'result'
             response['result'] = self.uris[request['command'].split('_')[0]]
+        elif request['command'] in ('add_subscription', ):
+            response['type'] = 'result'
+            label, sub_uri = request['args']
+            logging.getLogger(log_label(self)).info(
+                    "add_subscription: label=%s sub_uri=%s" % (label, sub_uri))
+
+            # Create a `DeferredSocket` configuration for our new `SUB` socket.
+            deferred_socks = OrderedDict([
+                (label, DeferredSocket(zmq.SUB)
+                    .connect(sub_uri)
+                    .setsockopt(zmq.SUBSCRIBE, '')
+                    .stream_callback('on_recv',
+                            functools.partial(self.process_subscribed_in,
+                                              label)))
+            ])
+
+            # Create the actual socket and stream for the new `DeferredSocket`.
+            # N.B. We must use `create_sockets` and `create_streams` separately
+            # here.  The reason is that the `create_sockets_and_streams`
+            # function passes the newly created set of sockets to
+            # `create_streams` internally, which means that only newly created
+            # sockets will be passed to any stream callbacks.  However, by
+            # explicitly calling `create_sockets` separately, we can simply
+            # pass in the up-to-date socket list, i.e., `env['socks']`.
+            temp_socks = create_sockets(env['ctx'], deferred_socks)
+            # Update current environment's list of sockets with newly created
+            # subscribe socket.
+            env['socks'].update(temp_socks)
+            temp_streams = create_streams(deferred_socks, env['socks'],
+                                          env['io_loop'])
+            # Update current environment's list of streams with newly created
+            # stream.
+            env['streams'].update(temp_streams)
+
+            response['result'] = 'SUCCESS'
+            response['description'] = 'The subscription has been added '\
+                    'successfully with the label: %s' % label
         else:
             async_id = '[%s] %s' % (datetime.now(), uuid4())
             response['type'] = 'async'
             response['async_id'] = async_id
-            socks['push'].send_multipart([async_id] + multipart_message)
-        socks['rep'].send_json(response)
+            env['socks']['push'].send_multipart([async_id] + multipart_message)
+        env['socks']['rep'].send_json(response)
 
 
 def unique_ipc_uri():

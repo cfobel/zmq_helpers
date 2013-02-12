@@ -25,12 +25,12 @@ class Client(object):
         self.target_count = target_count
         self.request_delay = request_delay
 
-    def process_response(self, socks, streams, stream, multipart_message):
+    def process_response(self, env, stream, multipart_message):
         logging.getLogger(log_label(self)).debug(
                 '%s %s' % (stream, multipart_message,))
         self.received_count += 1
         if self.received_count >= self.target_count:
-            self.io_loop.stop()
+            env['io_loop'].stop()
 
     def do_request(self):
         self.socks['req'].send_multipart(['hello world'])

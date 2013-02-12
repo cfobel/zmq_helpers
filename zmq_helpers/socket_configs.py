@@ -53,8 +53,9 @@ class SockConfigsTask(object):
         run_sock_configs(self.sock_configs)
 
 
-def create_sockets(ctx, deferred_socks):
-    socks = OrderedDict()
+def create_sockets(ctx, deferred_socks, socks=None):
+    if socks is None:
+        socks = OrderedDict()
 
     for label, deferred_sock in deferred_socks.iteritems():
         socks[label] = zmq.Socket(ctx, deferred_sock.sock_type)
@@ -86,7 +87,13 @@ def create_streams(deferred_socks, socks, io_loop):
                         label, stream, stream_event, callback))
                 # Register callback for stream event
                 #   e.g., stream_event='on_recv'
-                f = functools.partial(callback, socks, streams)
+                env = OrderedDict([
+                    ('ctx', sock.context),
+                    ('io_loop', io_loop),
+                    ('socks', socks),
+                    ('streams', streams),
+                ])
+                f = functools.partial(callback, env)
                 getattr(stream, stream_event)(f)
             streams[label] = stream
     return streams
@@ -115,10 +122,10 @@ def run_sock_configs(sock_configs):
         pass
 
 
-def echo(socks, streams, multipart_message, delay=0):
+def echo(env, multipart_message, delay=0):
     if delay > 0:
         time.sleep(delay)
-    socks['rep'].send_multipart(multipart_message)
+    env['socks']['rep'].send_multipart(multipart_message)
 
 
 class EchoServer(SockConfigsTask):
