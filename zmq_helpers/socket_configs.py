@@ -49,8 +49,13 @@ class DeferredSocket(object):
 
 
 class SockConfigsTask(object):
+    def __init__(self, sock_configs, on_run=None):
+        self.sock_configs = sock_configs
+        self.on_run = on_run
+
     def run(self):
-        run_sock_configs(self.sock_configs)
+        on_run = getattr(self, 'on_run', None)
+        run_sock_configs(self.sock_configs, on_run)
 
 
 def create_sockets(ctx, deferred_socks, socks=None):
@@ -113,8 +118,14 @@ def get_run_context(sock_configs):
     return ctx, io_loop, socks, streams
 
 
-def run_sock_configs(sock_configs):
+def run_sock_configs(sock_configs, on_run=None):
     ctx, io_loop, socks, streams = get_run_context(sock_configs)
+
+    def _on_run():
+        on_run(ctx, io_loop, socks, streams)
+
+    if on_run:
+        io_loop.add_callback(_on_run)
 
     try:
         io_loop.start()
