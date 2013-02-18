@@ -39,3 +39,16 @@ def whoami():
 # and similarly:
 def callersname():
     return sys._getframe(2).f_code.co_name
+
+
+def get_available_port(interface_addr='*'):
+    import zmq
+    ctx = zmq.Context.instance()
+    sock = zmq.Socket(ctx, zmq.PUSH)
+    port = sock.bind_to_random_port('tcp://' + interface_addr)
+    return port
+
+
+def get_random_tcp_uri(addr):
+    port = get_available_port(addr)
+    return 'tcp://%s:%s' % (addr, port)
