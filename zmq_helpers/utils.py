@@ -41,14 +41,33 @@ def callersname():
     return sys._getframe(2).f_code.co_name
 
 
-def get_available_port(interface_addr='*'):
+def get_available_ports(count=1, interface_addr='*', exclude=None):
     import zmq
-    ctx = zmq.Context.instance()
-    sock = zmq.Socket(ctx, zmq.PUSH)
-    port = sock.bind_to_random_port('tcp://' + interface_addr)
-    return port
+
+    if exclude is None:
+        exclude = []
+    exclude = set(exclude)
+    ctx = zmq.Context()
+    socks = []
+    ports = []
+    while len(ports) < count:
+        sock = zmq.Socket(ctx, zmq.PUSH)
+        port = sock.bind_to_random_port('tcp://' + interface_addr)
+        if port not in exclude:
+            ports.append(port)
+        socks.append(sock)
+    for sock in socks:
+        sock.close()
+    del ctx
+    return ports
 
 
-def get_random_tcp_uri(addr):
-    port = get_available_port(addr)
-    return 'tcp://%s:%s' % (addr, port)
+def get_random_tcp_uris(addr, count=1, exclude_ports=None):
+    if exclude_ports is None:
+        exclude_ports = []
+    ports = get_available_ports(count, addr, exclude_ports)
+    return ['tcp://%s:%s' % (addr, port) for port in ports]
+
+
+def get_random_tcp_uri(addr, exclude_ports=None):
+    return get_random_tcp_uris(addr, exclude_ports=exclude_ports)[0]
