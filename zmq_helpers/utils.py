@@ -50,9 +50,30 @@ def get_available_ports(count=1, interface_addr='*', exclude=None):
     ctx = zmq.Context()
     socks = []
     ports = []
-    while len(ports) < count:
+
+    def bind_socket(ctx, port=None):
         sock = zmq.Socket(ctx, zmq.PUSH)
-        port = sock.bind_to_random_port('tcp://' + interface_addr)
+        if port is None:
+            port = sock.bind_to_random_port('tcp://' + interface_addr)
+        return port, sock
+
+    preferred_ports_path = path('~/.zmq_helpers/preferred_ports.txt').expand()
+    if preferred_ports_path.isfile():
+        for p in map(int, preferred_ports_path.lines()):
+            if len(ports) >= count:
+                break
+            elif p in exclude:
+                continue
+            try:
+                port, sock = bind_socket(ctx, p)
+                ports.append(p)
+            except zmq.ZMQError:
+                pass
+            finally:
+                exclude.add(p)
+
+    while len(ports) < count:
+        port, sock = bind_socket(ctx)
         if port not in exclude:
             ports.append(port)
         socks.append(sock)
