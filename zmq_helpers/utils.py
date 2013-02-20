@@ -41,45 +41,49 @@ def callersname():
     return sys._getframe(2).f_code.co_name
 
 
+def test_port(addr, port=None):
+    import socket
+    from random import randint
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if port is None:
+        port = randint(1024, 65535)
+    s.bind((addr, port))
+    return port
+
+
 def get_available_ports(count=1, interface_addr='*', exclude=None):
-    import zmq
+    from random import randint
 
     if exclude is None:
         exclude = []
     exclude = set(exclude)
-    ctx = zmq.Context()
-    socks = []
     ports = []
 
-    def bind_socket(ctx, port=None):
-        sock = zmq.Socket(ctx, zmq.PUSH)
-        if port is None:
-            port = sock.bind_to_random_port('tcp://' + interface_addr)
-        return port, sock
+    if interface_addr == '*':
+        addr = 'localhost'
+    else:
+        addr = interface_addr
 
     preferred_ports_path = path('~/.zmq_helpers/preferred_ports.txt').expand()
+    preferred_ports = []
     if preferred_ports_path.isfile():
-        for p in map(int, preferred_ports_path.lines()):
-            if len(ports) >= count:
-                break
-            elif p in exclude:
-                continue
-            try:
-                port, sock = bind_socket(ctx, p)
-                ports.append(p)
-            except zmq.ZMQError:
-                pass
-            finally:
-                exclude.add(p)
+        preferred_ports += map(int, preferred_ports_path.lines())
 
     while len(ports) < count:
-        port, sock = bind_socket(ctx)
-        if port not in exclude:
-            ports.append(port)
-        socks.append(sock)
-    for sock in socks:
-        sock.close()
-    del ctx
+        try:
+            if preferred_ports:
+                port = preferred_ports.pop(0)
+            else:
+                port = randint(1024, 65535)
+            if port not in exclude:
+                port = test_port(addr, port)
+                ports.append(port)
+                exclude.add(port)
+        except (Exception, ), e:
+            #import traceback
+            #traceback.print_exc()
+            pass
     return ports
 
 

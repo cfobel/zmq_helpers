@@ -221,7 +221,7 @@ class AsyncServerAdapter(object):
                 self.uris['consumer_pull_be'],
                 self.uris['consumer_push_be']).run
         )
-        self.io_loop = IOLoop.instance()
+        self.io_loop = IOLoop()
         periodic_callback = PeriodicCallback(self.watchdog, 500, self.io_loop)
         periodic_callback.start()
         try:

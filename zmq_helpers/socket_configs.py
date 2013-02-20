@@ -114,8 +114,8 @@ def create_sockets_and_streams(ctx, deferred_socks, io_loop):
 
 
 def get_run_context(sock_configs):
-    ctx = zmq.Context.instance()
-    io_loop = IOLoop.instance()
+    ctx = zmq.Context()
+    io_loop = IOLoop()
     socks, streams = create_sockets_and_streams(ctx, sock_configs, io_loop)
 
     return ctx, io_loop, socks, streams
