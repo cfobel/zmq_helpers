@@ -19,7 +19,7 @@ Note:
 from collections import OrderedDict
 
 import zmq
-from zmq.eventloop.ioloop import IOLoop
+from zmq.eventloop.ioloop import IOLoop, PeriodicCallback
 from zmq.eventloop.zmqstream import ZMQStream
 
 from utils import log_label
@@ -51,13 +51,14 @@ class DeferredSocket(object):
 
 
 class SockConfigsTask(object):
-    def __init__(self, sock_configs, on_run=None):
+    def __init__(self, sock_configs, on_run=None, control_pipe=None):
         self.sock_configs = sock_configs
         self.on_run = on_run
+        self.control_pipe = control_pipe
 
     def run(self):
         on_run = getattr(self, 'on_run', None)
-        run_sock_configs(self.sock_configs, on_run)
+        run_sock_configs(self.sock_configs, on_run, self.control_pipe)
 
 
 def create_sockets(ctx, deferred_socks, socks=None):
@@ -120,7 +121,7 @@ def get_run_context(sock_configs):
     return ctx, io_loop, socks, streams
 
 
-def run_sock_configs(sock_configs, on_run=None):
+def run_sock_configs(sock_configs, on_run=None, control_pipe=None):
     ctx, io_loop, socks, streams = get_run_context(sock_configs)
 
     def _on_run():
@@ -128,6 +129,14 @@ def run_sock_configs(sock_configs, on_run=None):
 
     if on_run:
         io_loop.add_callback(_on_run)
+
+    def watchdog():
+        if control_pipe.poll():
+            io_loop.stop()
+
+    if control_pipe:
+        callback = PeriodicCallback(watchdog, 500, io_loop=io_loop)
+        callback.start()
 
     try:
         io_loop.start()

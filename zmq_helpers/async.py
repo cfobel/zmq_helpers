@@ -17,7 +17,7 @@ from .utils import cleanup_ipc_uris, log_label, unique_ipc_uri
 
 class Consumer(SockConfigsTask):
     def __init__(self, req_uri, push_uri, pull_uri, delay=0, push_bind=True,
-                 pull_bind=True):
+                 pull_bind=True, **kwargs):
         self.delay = delay
         self.uris = OrderedDict([
                 ('req', req_uri),
@@ -38,6 +38,7 @@ class Consumer(SockConfigsTask):
             self.sock_configs['pull'].bind(pull_uri)
         else:
             self.sock_configs['pull'].connect(pull_uri)
+        super(Consumer, self).__init__(self.sock_configs, **kwargs)
 
     def process_input(self, env, stream, multipart_message):
         logging.getLogger(log_label(self)).debug(
@@ -55,7 +56,7 @@ class Consumer(SockConfigsTask):
 
 class Producer(SockConfigsTask):
     def __init__(self, rep_uri, pub_uri, push_uri, pull_uri, push_bind=False,
-                 pull_bind=False):
+                 pull_bind=False, **kwargs):
         self.uris = OrderedDict([
             ('rep', rep_uri),
             ('pub', pub_uri),
@@ -82,6 +83,7 @@ class Producer(SockConfigsTask):
             self.sock_configs['pull'].bind(pull_uri)
         else:
             self.sock_configs['pull'].connect(pull_uri)
+        super(Producer, self).__init__(self.sock_configs, **kwargs)
 
     def process_response(self, env, stream, multipart_message):
         logging.getLogger(log_label(self)).debug('%s %s' % (stream,
