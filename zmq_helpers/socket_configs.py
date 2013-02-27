@@ -151,11 +151,12 @@ def echo(env, multipart_message, delay=0):
 
 
 class EchoServer(SockConfigsTask):
-    def __init__(self, bind_uri, delay=0):
+    def __init__(self, bind_uri, delay=0, control_pipe=None):
         # Configure server
         #    The server simply echoes any message received, by sending the same
         #    message back as a response.
         wrapped = functools.partial(echo, delay=delay)
+        self.control_pipe = control_pipe
         self.sock_configs = OrderedDict([
                 ('rep', DeferredSocket(zmq.REP)
                             .bind(bind_uri)
