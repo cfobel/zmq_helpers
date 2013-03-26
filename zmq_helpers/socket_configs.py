@@ -144,18 +144,20 @@ def run_sock_configs(sock_configs, on_run=None, control_pipe=None):
         pass
 
 
-def echo(env, multipart_message, delay=0):
+def echo(env, multipart_message, delay=0, verbose=False):
     if delay > 0:
         time.sleep(delay)
+    if verbose:
+        print multipart_message
     env['socks']['rep'].send_multipart(multipart_message)
 
 
 class EchoServer(SockConfigsTask):
-    def __init__(self, bind_uri, delay=0, control_pipe=None):
+    def __init__(self, bind_uri, delay=0, verbose=False, control_pipe=None):
         # Configure server
         #    The server simply echoes any message received, by sending the same
         #    message back as a response.
-        wrapped = functools.partial(echo, delay=delay)
+        wrapped = functools.partial(echo, delay=delay, verbose=verbose)
         self.control_pipe = control_pipe
         self.sock_configs = OrderedDict([
                 ('rep', DeferredSocket(zmq.REP)
