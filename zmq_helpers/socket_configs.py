@@ -49,7 +49,7 @@ class DeferredSocket(object):
 
 
 class SockConfigsTask(object):
-    def __init__(self, sock_configs, on_run=None, control_pipe=None):
+    def __init__(self, sock_configs, on_run=None, control_pipe=None, **kwargs):
         self.sock_configs = sock_configs
         self.on_run = on_run
         self.control_pipe = control_pipe

@@ -77,24 +77,35 @@ class ZmqRpcMixin(HandlerMixin):
     def rpc_sock_name(self, value):
         self._rpc_sock_name = value
 
-    def send_response(self, socks, response):
+    def send_response(self, socks, multipart_message, request, response):
         '''
         The base modifier controller uses pickle encoding for messages, so here
         we must serialize the message before sending it.  The pickling is
         performed by `send_pyobj`.
         '''
-        data = map(self.serialize_frame, response[:-1])
+        # First element is sender uuid
+        data = map(self.serialize_frame, request.values()[1:])
+        # First element is timestamp, last element is error
+        data += map(self.serialize_frame, response.values()[1:-1])
         try:
-            error = self.serialize_frame(response[-1])
+            error = self.serialize_frame(response.values()[-1])
         except:
             error = self.serialize_frame(None)
-        socks[self.rpc_sock_name].send_multipart(data + [error])
+        data.insert(0, self.serialize_frame(response['timestamp']))
+        data.append(error)
+        print '[send_response]', data
+        socks[self.rpc_sock_name].send_multipart(data)
 
     def serialize_frame(self, frame):
         return pickle.dumps(frame)
 
     def deserialize_frame(self, frame):
         return pickle.loads(frame)
+
+    def unpack_request(self, multipart_message):
+        request_data = map(self.deserialize_frame, multipart_message)
+        fields = ('sender_uuid', 'command', 'args', 'kwargs')
+        return OrderedDict((k, v) for k, v in zip(fields, request_data))
 
     def process_rpc_request(self, env, multipart_message):
         '''
@@ -106,19 +117,19 @@ class ZmqRpcMixin(HandlerMixin):
 
         after the `refresh_handler_methods` has been called.
         '''
-        response = OrderedDict()
+        response = OrderedDict(timestamp=str(datetime.now()))
+        request = OrderedDict()
         try:
-            request = map(self.deserialize_frame, multipart_message)
-            fields = ('sender_uuid', 'command', 'args', 'kwargs')
-            response = OrderedDict((k, v) for k, v in zip(fields, request))
-            handler = self.get_handler(response['command'])
+            request = self.unpack_request(multipart_message)
+            handler = self.get_handler(request['command'])
             if handler is None:
-                raise ValueError, 'Unknown command: %s' % response['command']
-            response['args'] = response['args'] or tuple()
-            response['kwargs'] = response['kwargs'] or {}
+                raise ValueError, 'Unknown command: %s' % request['command']
+            request['args'] = request['args'] or tuple()
+            request['kwargs'] = request['kwargs'] or {}
             # Isolate handler call in `call_handler` method to allow subclasses
             # to perform special-handling, if necessary.
-            response['result'] = self.call_handler(handler, env, response)
+            response['result'] = self.call_handler(handler, env,
+                                                   multipart_message, request)
         except (Exception, ), error:
             import traceback
 
@@ -133,20 +144,19 @@ class ZmqRpcMixin(HandlerMixin):
         response['error_str'] = response.get('error_str')
         response['error'] = response.get('error')
         # Fill in the first position in the `OrderedDict` with the current
-        # time, instead of the `sender_uuid`, since the sender doesn't need to
-        # know the sender's ID (because it is the sender).  This let's us use
-        # this message frame for something useful - when the request was
-        # completed on the RPC host.
-        response['sender_uuid'] = str(datetime.now())
-        self.send_response(env['socks'], response.values())
+        # time, i.e., when the request was completed.
+        response['timestamp'] = str(datetime.now())
+        self.send_response(env['socks'], multipart_message, request, response)
 
-    def call_handler(self, handler, env, response):
+    def call_handler(self, handler, env, multipart_message, request):
         '''
         Isolate handler call in this method to allow subclasses to perform
         special-handling, if necessary.
+
+        Note that the multipart-message is ignored by default.
         '''
-        return handler(env, response['sender_uuid'], *response['args'],
-                       **response['kwargs'])
+        return handler(env, request['sender_uuid'], *request['args'],
+                       **request['kwargs'])
 
 
 class ZmqJsonRpcMixin(ZmqRpcMixin):
@@ -165,18 +175,21 @@ class ZmqRpcTaskBase(SockConfigsTask):
     Note that this class may only be used with either `ZmqRpcMixin` or
     `ZmqJsonRpcMixin`.
     '''
-    def __init__(self, rpc_uri, on_run=None, control_pipe=None, **kwargs):
-        self.uris = OrderedDict(rpc=rpc_uri)
+    def __init__(self, **kwargs):
+        super(ZmqRpcTaskBase, self).__init__(self.get_sock_configs(), **kwargs)
+        self.uris = self.get_uris()
+        self._bind_or_connect(kwargs)
+        self.refresh_handler_methods()
 
-        super(ZmqRpcTaskBase, self).__init__(self.get_sock_configs(),
-                                         on_run=on_run,
-                                         control_pipe=control_pipe)
+    def _bind_or_connect(self, kwargs):
         for k in self.sock_configs:
             if kwargs.get(k + '_bind', True):
                 self.sock_configs[k].bind(self.uris[k])
             else:
                 self.sock_configs[k].connect(self.uris[k])
-        self.refresh_handler_methods()
+
+    def get_uris(self):
+        raise NotImplementedError
 
     def get_sock_configs(self):
         return OrderedDict([
@@ -187,7 +200,6 @@ class ZmqRpcTaskBase(SockConfigsTask):
 
     def on__available_handlers(self, env, *args, **kwargs):
         return sorted(self.handler_methods.keys())
-
 
 
 class ZmqRpcTask(ZmqRpcTaskBase, ZmqRpcMixin):
