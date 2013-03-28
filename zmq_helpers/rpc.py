@@ -1,3 +1,4 @@
+import logging
 import inspect
 from collections import OrderedDict
 try:
@@ -11,6 +12,7 @@ import zmq
 from zmq.utils import jsonapi
 
 from .socket_configs import SockConfigsTask, DeferredSocket
+from .utils import log_label
 
 
 class HandlerMixin(object):
@@ -93,7 +95,8 @@ class ZmqRpcMixin(HandlerMixin):
             error = self.serialize_frame(None)
         data.insert(0, self.serialize_frame(response['timestamp']))
         data.append(error)
-        print '[send_response]', data
+        logging.getLogger(log_label(self)).info(
+            'request: uuid=%(sender_uuid)s command=%(command)s' % request)
         socks[self.rpc_sock_name].send_multipart(data)
 
     def serialize_frame(self, frame):
@@ -229,7 +232,8 @@ class DeferredRpcCommand(object):
         try:
             if self.uuid is None:
                 uuid = str(uuid1())
-                print 'auto-assign uuid: %s' % uuid
+                logging.getLogger(log_label(self)).info(
+                    'auto-assign uuid: %s' % uuid)
             else:
                 uuid = self.uuid
             data = [uuid, self.command, args, kwargs]
