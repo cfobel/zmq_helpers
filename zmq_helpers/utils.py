@@ -1,3 +1,4 @@
+import urllib2
 import sys
 import logging
 from uuid import uuid4
@@ -96,3 +97,7 @@ def get_random_tcp_uris(addr, count=1, exclude_ports=None):
 
 def get_random_tcp_uri(addr, exclude_ports=None):
     return get_random_tcp_uris(addr, exclude_ports=exclude_ports)[0]
+
+
+def get_public_ip():
+    return urllib2.urlopen('http://myip.dnsomatic.com').read()
