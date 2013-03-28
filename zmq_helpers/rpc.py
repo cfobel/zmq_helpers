@@ -5,6 +5,7 @@ try:
 except ImportError:
     import pickle
 from datetime import datetime
+from uuid import uuid1, uuid4
 
 import zmq
 from zmq.utils import jsonapi
@@ -105,23 +106,47 @@ class ZmqRpcMixin(HandlerMixin):
 
         after the `refresh_handler_methods` has been called.
         '''
-        timestamp, command, args, kwargs, result, error, error_str = [None] * 7
+        response = OrderedDict()
         try:
-            timestamp, command, args, kwargs = map(self.deserialize_frame,
-                                                multipart_message)
-            handler = self.get_handler(command)
+            request = map(self.deserialize_frame, multipart_message)
+            fields = ('sender_uuid', 'command', 'args', 'kwargs')
+            response = OrderedDict((k, v) for k, v in zip(fields, request))
+            handler = self.get_handler(response['command'])
             if handler is None:
-                raise ValueError, 'Unknown command: %s' % command
-            args = args or tuple()
-            kwargs = kwargs or {}
-            result = handler(env, *args, **kwargs)
+                raise ValueError, 'Unknown command: %s' % response['command']
+            response['args'] = response['args'] or tuple()
+            response['kwargs'] = response['kwargs'] or {}
+            # Isolate handler call in `call_handler` method to allow subclasses
+            # to perform special-handling, if necessary.
+            response['result'] = self.call_handler(handler, env, response)
         except (Exception, ), error:
             import traceback
+
+            # Insert empty result to preserve response item count and order.
+            response['result'] = None
+
             # In the case of an exception, return a formatted string
             # representation of the error.
-            error_str = traceback.format_exc().strip()
-        data = ['%s' % datetime.now(), command, args, kwargs, result, error_str, error]
-        self.send_response(env['socks'], data)
+            response['error_str'] = traceback.format_exc().strip()
+            response['error'] = error
+        # Fill in empty error fields if there was no error.
+        response['error_str'] = response.get('error_str')
+        response['error'] = response.get('error')
+        # Fill in the first position in the `OrderedDict` with the current
+        # time, instead of the `sender_uuid`, since the sender doesn't need to
+        # know the sender's ID (because it is the sender).  This let's us use
+        # this message frame for something useful - when the request was
+        # completed on the RPC host.
+        response['sender_uuid'] = str(datetime.now())
+        self.send_response(env['socks'], response.values())
+
+    def call_handler(self, handler, env, response):
+        '''
+        Isolate handler call in this method to allow subclasses to perform
+        special-handling, if necessary.
+        '''
+        return handler(env, response['sender_uuid'], *response['args'],
+                       **response['kwargs'])
 
 
 class ZmqJsonRpcMixin(ZmqRpcMixin):
@@ -160,7 +185,7 @@ class ZmqRpcTaskBase(SockConfigsTask):
                                              self.process_rpc_request)),
         ])
 
-    def on__available_handlers(self, env):
+    def on__available_handlers(self, env, *args, **kwargs):
         return sorted(self.handler_methods.keys())
 
 
@@ -174,9 +199,10 @@ class ZmqJsonRpcTask(ZmqRpcTaskBase, ZmqJsonRpcMixin):
 
 
 class DeferredRpcCommand(object):
-    def __init__(self, command, rpc_uri):
+    def __init__(self, command, rpc_uri, uuid=None):
         self.command = command
         self.rpc_uri = rpc_uri
+        self.uuid = uuid
 
     def _serialize_frame(self, frame):
         return pickle.dumps(frame)
@@ -189,7 +215,12 @@ class DeferredRpcCommand(object):
         sock = zmq.Socket(ctx, zmq.REQ)
         sock.connect(self.rpc_uri)
         try:
-            data = ['%s' % datetime.now(), self.command, args, kwargs]
+            if self.uuid is None:
+                uuid = str(uuid1())
+                print 'auto-assign uuid: %s' % uuid
+            else:
+                uuid = self.uuid
+            data = [uuid, self.command, args, kwargs]
             sock.send_multipart(map(self._serialize_frame, data))
             timestamp, command, args, kwargs, result, error_str, error = map(
                 self._deserialize_frame, sock.recv_multipart())
@@ -221,14 +252,18 @@ class DeferredJsonRpcCommand(DeferredRpcCommand):
 class ZmqRpcProxyBase(object):
     _deferred_command_class = None
 
-    def __init__(self, rpc_uri):
+    def __init__(self, rpc_uri, uuid=None):
+        if uuid is None:
+            self.uuid = str(uuid4())
+        else:
+            self.uuid = uuid
         self._uris = OrderedDict(rpc=rpc_uri)
         self._refresh_handler_methods()
 
     def _refresh_handler_methods(self):
         self.__handler_methods = self._do_request('available_handlers')
         for m in self.__handler_methods:
-            setattr(self, m, self._deferred_command_class(m, self._uris['rpc']))
+            setattr(self, m, self._deferred_command_class(m, self._uris['rpc'], uuid=self.uuid))
 
     @property
     def _handler_methods(self):
@@ -237,7 +272,7 @@ class ZmqRpcProxyBase(object):
         return self.__handler_methods
 
     def _do_request(self, command, *args, **kwargs):
-        c = self._deferred_command_class(command, self._uris['rpc'])
+        c = self._deferred_command_class(command, self._uris['rpc'], uuid=self.uuid)
         return c(*args, **kwargs)
 
 
