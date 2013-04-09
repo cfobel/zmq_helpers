@@ -7,6 +7,7 @@ except ImportError:
     import pickle
 from datetime import datetime
 from uuid import uuid1, uuid4
+import time
 
 import zmq
 from zmq.utils import jsonapi
@@ -95,8 +96,11 @@ class ZmqRpcMixin(HandlerMixin):
             error = self.serialize_frame(None)
         data.insert(0, self.serialize_frame(response['timestamp']))
         data.append(error)
-        logging.getLogger(log_label(self)).info(
-            'request: uuid=%(sender_uuid)s command=%(command)s' % request)
+        try:
+            logging.getLogger(log_label(self)).info(
+                'request: uuid=%(sender_uuid)s command=%(command)s' % request)
+        except:
+            logging.getLogger(log_label(self)).info(request)
         socks[self.rpc_sock_name].send_multipart(data)
 
     def serialize_frame(self, frame):
@@ -108,7 +112,8 @@ class ZmqRpcMixin(HandlerMixin):
     def unpack_request(self, multipart_message):
         request_data = map(self.deserialize_frame, multipart_message)
         fields = ('sender_uuid', 'command', 'args', 'kwargs')
-        return OrderedDict((k, v) for k, v in zip(fields, request_data))
+        result = OrderedDict((k, v) for k, v in zip(fields, request_data))
+        return result
 
     def process_rpc_request(self, env, multipart_message):
         '''
@@ -122,6 +127,7 @@ class ZmqRpcMixin(HandlerMixin):
         '''
         response = OrderedDict(timestamp=str(datetime.now()))
         request = OrderedDict()
+        logging.getLogger(log_label(self)).info('%s' % multipart_message)
         try:
             request = self.unpack_request(multipart_message)
             handler = self.get_handler(request['command'])
@@ -226,35 +232,53 @@ class DeferredRpcCommand(object):
         return pickle.loads(frame)
 
     def __call__(self, *args, **kwargs):
-        ctx = zmq.Context.instance()
-        sock = zmq.Socket(ctx, zmq.REQ)
-        sock.connect(self.rpc_uri)
-        try:
-            if self.uuid is None:
-                uuid = str(uuid1())
-                logging.getLogger(log_label(self)).info(
-                    'auto-assign uuid: %s' % uuid)
-            else:
-                uuid = self.uuid
-            data = [uuid, self.command, args, kwargs]
-            sock.send_multipart(map(self._serialize_frame, data))
-            timestamp, command, args, kwargs, result, error_str, error = map(
-                self._deserialize_frame, sock.recv_multipart())
-            if error:
-                raise error
-            if error_str:
-                raise RuntimeError, '''
+        flags = kwargs.pop('__flags__', None)
+        print '[DeferredJsonRpcCommand]', flags
+        self.ctx = zmq.Context()
+        self.sock = zmq.Socket(self.ctx, zmq.REQ)
+        self.sock.connect(self.rpc_uri)
+        self.send_request(*args, **kwargs)
+        return self.recv_response(flags=flags)
+
+    def send_request(self, *args, **kwargs):
+        if self.uuid is None:
+            uuid = str(uuid1())
+            logging.getLogger(log_label(self)).info(
+                'auto-assign uuid: %s' % uuid)
+        else:
+            uuid = self.uuid
+        data = [uuid, self.command, args, kwargs]
+        logging.getLogger(log_label(self)).info(data)
+        self.sock.send_multipart(map(self._serialize_frame, data))
+
+    def recv_response(self, flags=None):
+        _kwargs = {}
+        if flags:
+            _kwargs['flags'] = flags
+        timestamp, command, args, kwargs, result, error_str, error = map(
+            self._deserialize_frame,
+            self.sock.recv_multipart(**_kwargs))
+        if error:
+            raise error
+        if error_str:
+            raise RuntimeError, '''
 Remote exception occurred:
 ------------------------------------------------------------------------
 %s
 ========================================================================
                 '''.strip() % (error_str, )
-
-        finally:
-            sock.close()
-            del sock
-            del ctx
+        # We've received our response, so we can close our socket now.
+        self.cleanup()
         return result
+
+    def __del__(self):
+        self.cleanup()
+
+    def cleanup(self):
+        if hasattr(self, 'sock'):
+            self.sock.close()
+            del self.sock
+            del self.ctx
 
 
 class DeferredJsonRpcCommand(DeferredRpcCommand):
