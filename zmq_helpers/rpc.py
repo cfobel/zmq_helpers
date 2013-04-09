@@ -7,7 +7,6 @@ except ImportError:
     import pickle
 from datetime import datetime
 from uuid import uuid1, uuid4
-import time
 
 import zmq
 from zmq.utils import jsonapi
@@ -233,14 +232,46 @@ class DeferredRpcCommand(object):
 
     def __call__(self, *args, **kwargs):
         flags = kwargs.pop('__flags__', None)
-        print '[DeferredJsonRpcCommand]', flags
-        self.ctx = zmq.Context()
-        self.sock = zmq.Socket(self.ctx, zmq.REQ)
-        self.sock.connect(self.rpc_uri)
-        self.send_request(*args, **kwargs)
-        return self.recv_response(flags=flags)
+        ctx = zmq.Context()
+        sock = zmq.Socket(ctx, zmq.REQ)
+        sock.connect(self.rpc_uri)
+        try:
+            self.send_request(sock, *args, **kwargs)
+            response = self._unpack_response(self.recv_response(sock,
+                                                                flags=flags))
+            return response
+        finally:
+            sock.close()
+            del sock
+            del ctx
 
-    def send_request(self, *args, **kwargs):
+    def spawn(self, *args, **kwargs):
+        import eventlet
+
+        event = eventlet.event.Event()
+        eventlet.spawn(self._green_call, event, *args, **kwargs)
+        return event
+
+    def _green_call(self, event, *args, **kwargs):
+        import eventlet
+        import zmq.green as gzmq
+
+        flags = gzmq.NOBLOCK
+        ctx = gzmq.Context()
+        sock = gzmq.Socket(ctx, gzmq.REQ)
+        sock.connect(self.rpc_uri)
+        self.send_request(sock, *args, **kwargs)
+        while True:
+            try:
+                response = self.recv_response(sock, flags=flags)
+                break
+            except gzmq.ZMQError, e:
+                if e.errno != gzmq.EAGAIN:
+                    raise
+                eventlet.sleep(0.01)
+        event.send(self._unpack_response(response))
+
+    def send_request(self, sock, *args, **kwargs):
         if self.uuid is None:
             uuid = str(uuid1())
             logging.getLogger(log_label(self)).info(
@@ -249,15 +280,18 @@ class DeferredRpcCommand(object):
             uuid = self.uuid
         data = [uuid, self.command, args, kwargs]
         logging.getLogger(log_label(self)).info(data)
-        self.sock.send_multipart(map(self._serialize_frame, data))
+        sock.send_multipart(map(self._serialize_frame, data))
 
-    def recv_response(self, flags=None):
+    def recv_response(self, sock, flags=None):
         _kwargs = {}
         if flags:
             _kwargs['flags'] = flags
+        return sock.recv_multipart(**_kwargs)
+
+    def _unpack_response(self, response):
         timestamp, command, args, kwargs, result, error_str, error = map(
-            self._deserialize_frame,
-            self.sock.recv_multipart(**_kwargs))
+                self._deserialize_frame, response
+        )
         if error:
             raise error
         if error_str:
@@ -267,18 +301,7 @@ Remote exception occurred:
 %s
 ========================================================================
                 '''.strip() % (error_str, )
-        # We've received our response, so we can close our socket now.
-        self.cleanup()
         return result
-
-    def __del__(self):
-        self.cleanup()
-
-    def cleanup(self):
-        if hasattr(self, 'sock'):
-            self.sock.close()
-            del self.sock
-            del self.ctx
 
 
 class DeferredJsonRpcCommand(DeferredRpcCommand):

@@ -2,7 +2,7 @@ from collections import OrderedDict
 import time
 from multiprocessing import Pipe, Process
 
-import zmq
+import eventlet
 from zmq_helpers.rpc import ZmqJsonRpcProxy, ZmqJsonRpcTask
 from zmq_helpers.utils import get_random_tcp_uri
 
@@ -12,7 +12,10 @@ class TestTask(ZmqJsonRpcTask):
         return OrderedDict(rpc=get_random_tcp_uri('*'))
 
     def on__hello_world(self, *args, **kwargs):
-        print '[hello_world]'
+        for i in range(4):
+            print '[hello_world] %d' % i
+            time.sleep(1)
+        return 'hello, world'
 
 
 def test__main():
@@ -27,24 +30,22 @@ def main():
     try:
         p.start()
         z = ZmqJsonRpcProxy(uri.replace('*', 'localhost'))
-        m = z.available_handlers
-        success = False
-        try:
-            result = m(__flags__=zmq.NOBLOCK)
-            success = True
-        except (Exception, ), e:
-            # Failed first try.
-            pass
 
-        if not success:
-            # The first try failed, so try up to 10 more times
-            for i in range(10):
-                try:
-                    result = m.recv_response()
-                    break
-                except (Exception, ), e:
-                    time.sleep(0.001)
-        assert(set(result) == set(('available_handlers', 'hello_world')))
+        # Rather than calling the `hello_world` proxy method directly, we
+        # instead call the `spawn` attribute of the proxy method.  This causes
+        # the proxy call to be performed using eventlet green threads.  Here,
+        # `d` is an `eventlet.event.Event` instance, which can be queried for
+        # when the result is ready.  The final result can be obtained by
+        # calling the event's `wait` method.  By calling `eventlet.sleep`, we
+        # yield execution to the RPC green thread to check again for a
+        # response.
+        d = z.hello_world.spawn()
+        while not d.ready():
+            print 'Something is happening in the "main" thread!'
+            eventlet.sleep(0.5)
+        result = d.wait()
+        print 'result is ready:', result
+        assert(result == 'hello, world')
     finally:
         parent.send('shutdown')
         time.sleep(0.1)
