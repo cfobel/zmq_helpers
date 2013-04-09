@@ -11,7 +11,4 @@ setup(name = "zmq_helpers",
     license = "GPL",
     long_description = """""",
     packages = ['zmq_helpers'],
-    package_data={'zmq_helpers': ['zmq_include/*'],
-                  'zmq_helpers.shared_storage': ['zmq_templates/*',
-                          'pycuda_include/*']}
 )
