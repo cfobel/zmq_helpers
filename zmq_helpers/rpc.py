@@ -126,7 +126,7 @@ class ZmqRpcMixin(HandlerMixin):
         '''
         response = OrderedDict(timestamp=str(datetime.now()))
         request = OrderedDict()
-        logging.getLogger(log_label(self)).info('%s' % multipart_message)
+        logging.getLogger(log_label(self)).debug('%s' % multipart_message)
         try:
             request = self.unpack_request(multipart_message)
             handler = self.get_handler(request['command'])
@@ -261,14 +261,19 @@ class DeferredRpcCommand(object):
         sock = gzmq.Socket(ctx, gzmq.REQ)
         sock.connect(self.rpc_uri)
         self.send_request(sock, *args, **kwargs)
-        while True:
-            try:
-                response = self.recv_response(sock, flags=flags)
-                break
-            except gzmq.ZMQError, e:
-                if e.errno != gzmq.EAGAIN:
-                    raise
-                eventlet.sleep(0.01)
+        try:
+            while True:
+                try:
+                    response = self.recv_response(sock, flags=flags)
+                    break
+                except gzmq.ZMQError, e:
+                    if e.errno != gzmq.EAGAIN:
+                        raise
+                    eventlet.sleep(0.01)
+        finally:
+            sock.close()
+            del sock
+            del ctx
         event.send(self._unpack_response(response))
 
     def send_request(self, sock, *args, **kwargs):
@@ -279,7 +284,7 @@ class DeferredRpcCommand(object):
         else:
             uuid = self.uuid
         data = [uuid, self.command, args, kwargs]
-        logging.getLogger(log_label(self)).info(data)
+        logging.getLogger(log_label(self)).debug(data)
         sock.send_multipart(map(self._serialize_frame, data))
 
     def recv_response(self, sock, flags=None):
