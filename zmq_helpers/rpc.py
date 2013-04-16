@@ -297,8 +297,6 @@ class DeferredRpcCommand(object):
         timestamp, command, args, kwargs, result, error_str, error = map(
                 self._deserialize_frame, response
         )
-        if error:
-            raise error
         if error_str:
             raise RuntimeError, '''
 Remote exception occurred:
@@ -306,6 +304,8 @@ Remote exception occurred:
 %s
 ========================================================================
                 '''.strip() % (error_str, )
+        elif error:
+            raise error
         return result
 
 
@@ -315,6 +315,38 @@ class DeferredJsonRpcCommand(DeferredRpcCommand):
 
     def _deserialize_frame(self, frame):
         return jsonapi.loads(frame)
+
+
+class DeferredSingleFrameJsonRpcCommand(DeferredJsonRpcCommand):
+    def _unpack_response(self, data):
+        if 'error_str' in data and data['error_str']:
+            raise RuntimeError, '''
+Remote exception occurred:
+------------------------------------------------------------------------
+%s
+========================================================================
+                '''.strip() % (data['error_str'], )
+        elif 'error' in data and data['error']:
+            raise data['error']
+        return data['result']
+
+    def recv_response(self, sock, flags=None):
+        _kwargs = {}
+        if flags:
+            _kwargs['flags'] = flags
+        return sock.recv_json(**_kwargs)
+
+    def send_request(self, sock, *args, **kwargs):
+        if self.uuid is None:
+            uuid = str(uuid1())
+            logging.getLogger(log_label(self)).info(
+                'auto-assign uuid: %s' % uuid)
+        else:
+            uuid = self.uuid
+        data = {'uuid': uuid, 'command': self.command, 'args': args,
+                'kwargs': kwargs, }
+        logging.getLogger(log_label(self)).debug(data)
+        sock.send(jsonapi.dumps(data))
 
 
 class ZmqRpcProxyBase(object):
@@ -350,3 +382,10 @@ class ZmqRpcProxy(ZmqRpcProxyBase):
 
 class ZmqJsonRpcProxy(ZmqRpcProxyBase):
     _deferred_command_class = DeferredJsonRpcCommand
+
+
+class ZmqSingleFrameJsonRpcProxy(ZmqJsonRpcProxy):
+    _deferred_command_class = DeferredSingleFrameJsonRpcCommand
+
+    def __init__(self, *args, **kwargs):
+        super(ZmqSingleFrameJsonRpcProxy, self).__init__(*args, **kwargs)

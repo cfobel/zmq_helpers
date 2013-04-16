@@ -9,7 +9,9 @@ from zmq_helpers.utils import get_random_tcp_uri
 
 class TestTask(ZmqJsonRpcTask):
     def get_uris(self):
-        return OrderedDict(rpc=get_random_tcp_uri('*'))
+        uris = OrderedDict(rpc=get_random_tcp_uri('*'))
+        print uris
+        return uris
 
     def on__hello_world(self, *args, **kwargs):
         for i in range(4):
