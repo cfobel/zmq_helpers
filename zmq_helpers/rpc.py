@@ -1,3 +1,4 @@
+from functools import partial
 import logging
 import inspect
 from collections import OrderedDict
@@ -15,64 +16,88 @@ from .socket_configs import SockConfigsTask, DeferredSocket
 from .utils import log_label
 
 
-class HandlerMixin(object):
-    handler_prefix = 'on__'
+def _available_handlers(obj, prefix, *args, **kwargs):
+    return sorted(obj.handler_methods[prefix].keys())
+
+
+def get_handler(obj, prefix, command):
+    '''
+    Check to see if a handler exists for a given command.  If the command
+    is not found in the dictionary of handler methods, refresh the
+    dictionary to be sure the handler is still not available.
+    '''
+    if not prefix in obj.handler_methods\
+            or not command in obj.handler_methods[prefix]:
+        refresh_handler_methods(obj, prefix)
+    if command == 'available_handlers' and\
+            not command in obj.handler_methods[prefix]:
+        # The `available_handlers` has not been overridden, so perform the
+        # default handling, which is to return a list of the available
+        # handlers.
+        handler = partial(_available_handlers, obj, prefix)
+        obj._handler_methods[prefix]['available_handlers'] = handler
+    return obj.handler_methods[prefix].get(command)
+
+
+def refresh_handler_methods(obj, prefix):
+    '''
+    While requests can be handled manually from within the
+    `process_request` method, as a convenience, callbacks are automatically
+    registered based on the following method naming convention:
+
+        def <handler_prefix><request command>(self, env, request,
+                                                response): ...
+
+    This function (`refresh_handler_methods`) updates the current dictionary
+    mapping each command name to the corresponding handler method, based on
+    the handler method name.  The resulting dictionary is used by the
+    `get_handler` method to check if a handler exists for a given command.
+    '''
+    obj._refreshing_methods = True
+    if not hasattr(obj, '_handler_methods'):
+        obj._handler_methods = OrderedDict()
+    obj._handler_methods[prefix] = OrderedDict(sorted([(k[len(prefix):], v)
+            for k, v in inspect.getmembers(obj)
+            if k.startswith(prefix)
+                and inspect.ismethod(v) or inspect.isfunction(v)
+    ]))
+    obj._refreshing_methods = False
+    return obj._handler_methods[prefix]
+
+
+class BaseHandlerMixin(object):
+    handler_prefixes = tuple()
 
     @property
     def handler_methods(self):
         if not hasattr(self, '_handler_methods'):
             if not getattr(self, '_refreshing_methods', False):
-                return self.refresh_handler_methods()
+                self.refresh_handler_methods()
             else:
                 return OrderedDict()
         return self._handler_methods
 
-    def get_handler(self, command):
+    def get_handler(self, command, prefix=None):
         '''
         Check to see if a handler exists for a given command.  If the command
         is not found in the dictionary of handler methods, refresh the
         dictionary to be sure the handler is still not available.
         '''
-        if not command in self.handler_methods:
-            self.refresh_handler_methods()
-        if command == 'available_handlers' and\
-                not command in self.handler_methods:
-            # The `available_handlers` has not been overridden, so perform the
-            # default handling, which is to return a list of the available
-            # handlers.
-            handler = self._available_handlers
-            self._handler_methods['available_handlers'] = handler
-        return self.handler_methods.get(command)
-
-    def _available_handlers(self, *args, **kwargs):
-        return sorted(self.handler_methods.keys())
+        if prefix is None:
+            prefix = self.handler_prefixes[0]
+        return get_handler(self, prefix, command)
 
     def refresh_handler_methods(self):
-        '''
-        While requests can be handled manually from within the
-        `process_request` method, as a convenience, callbacks are automatically
-        registered based on the following method naming convention:
-
-            def <handler_prefix><request command>(self, env, request,
-                                                  response): ...
-
-        This method (`refresh_handler_methods`) updates the current dictionary
-        mapping each command name to the corresponding handler method, based on
-        the handler method name.  The resulting dictionary is used by the
-        `get_handler` method to check if a handler exists for a given command.
-        '''
-        self._refreshing_methods = True
-        self._handler_methods = OrderedDict(sorted([
-                (k[len(self.handler_prefix):], v)
-                for k, v in inspect.getmembers(self)
-                if k.startswith(self.handler_prefix)
-                    and inspect.ismethod(v) or inspect.isfunction(v)
-        ]))
-        self._refreshing_methods = False
-        return self._handler_methods
+        for prefix in self.handler_prefixes:
+            refresh_handler_methods(self, prefix)
+        return self.handler_methods
 
 
-class ZmqRpcMixin(HandlerMixin):
+class RpcHandlerMixin(BaseHandlerMixin):
+    handler_prefixes = ('rpc__', )
+
+
+class ZmqRpcMixin(RpcHandlerMixin):
     '''
     Exposes the class's methods through pickle-API over a ZeroMQ socket.
 
@@ -144,7 +169,7 @@ class ZmqRpcMixin(HandlerMixin):
         logging.getLogger(log_label(self)).debug('%s' % multipart_message)
         try:
             request = self.unpack_request(multipart_message)
-            handler = self.get_handler(request['command'])
+            handler = self.get_handler(request['command'], prefix='rpc__')
             if handler is None:
                 raise ValueError, 'Unknown command: %s' % request['command']
             request['args'] = request['args'] or tuple()

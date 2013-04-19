@@ -73,11 +73,20 @@ def create_sockets(ctx, deferred_socks, socks=None):
 
     for label, s in deferred_socks.iteritems():
         for bind_uri in s.binds:
-            socks[label].bind(bind_uri)
-
+            try:
+                socks[label].bind(bind_uri)
+            except:
+                logging.getLogger(log_label()).error('Could not bind: %s',
+                                                     bind_uri)
+                raise
     for label, s in deferred_socks.iteritems():
         for connect_uri in s.connects:
-            socks[label].connect(connect_uri)
+            try:
+                socks[label].connect(connect_uri)
+            except:
+                logging.getLogger(log_label()).error('Could not connect: %s',
+                                                     connect_uri)
+                raise
     return socks
 
 
