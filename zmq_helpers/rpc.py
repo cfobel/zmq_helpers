@@ -33,9 +33,19 @@ class HandlerMixin(object):
         is not found in the dictionary of handler methods, refresh the
         dictionary to be sure the handler is still not available.
         '''
-        if not command in self._handler_methods:
+        if not command in self.handler_methods:
             self.refresh_handler_methods()
-        return self._handler_methods.get(command)
+        if command == 'available_handlers' and\
+                not command in self.handler_methods:
+            # The `available_handlers` has not been overridden, so perform the
+            # default handling, which is to return a list of the available
+            # handlers.
+            handler = self._available_handlers
+            self._handler_methods['available_handlers'] = handler
+        return self.handler_methods.get(command)
+
+    def _available_handlers(self, *args, **kwargs):
+        return sorted(self.handler_methods.keys())
 
     def refresh_handler_methods(self):
         '''
@@ -210,9 +220,6 @@ class ZmqRpcTaskBase(SockConfigsTask):
                             .stream_callback('on_recv',
                                              self.process_rpc_request)),
         ])
-
-    def on__available_handlers(self, env, *args, **kwargs):
-        return sorted(self.handler_methods.keys())
 
 
 class ZmqRpcTask(ZmqRpcTaskBase, ZmqRpcMixin):
