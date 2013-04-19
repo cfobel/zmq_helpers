@@ -16,6 +16,8 @@ from .utils import log_label
 
 
 class HandlerMixin(object):
+    handler_prefix = 'on__'
+
     @property
     def handler_methods(self):
         if not hasattr(self, '_handler_methods'):
@@ -41,7 +43,8 @@ class HandlerMixin(object):
         `process_request` method, as a convenience, callbacks are automatically
         registered based on the following method naming convention:
 
-            def on__<request command>(self, env, request, response): ...
+            def <handler_prefix><request command>(self, env, request,
+                                                  response): ...
 
         This method (`refresh_handler_methods`) updates the current dictionary
         mapping each command name to the corresponding handler method, based on
@@ -49,10 +52,12 @@ class HandlerMixin(object):
         `get_handler` method to check if a handler exists for a given command.
         '''
         self._refreshing_methods = True
-        self._handler_methods = OrderedDict(sorted([(k[len('on__'):], v)
+        self._handler_methods = OrderedDict(sorted([
+                (k[len(self.handler_prefix):], v)
                 for k, v in inspect.getmembers(self)
-                if k.startswith('on__') and inspect.ismethod(v) or
-                        inspect.isfunction(v)]))
+                if k.startswith(self.handler_prefix)
+                    and inspect.ismethod(v) or inspect.isfunction(v)
+        ]))
         self._refreshing_methods = False
         return self._handler_methods
 
