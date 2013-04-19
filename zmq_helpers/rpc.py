@@ -222,11 +222,11 @@ class ZmqRpcTaskBase(SockConfigsTask):
         ])
 
 
-class ZmqRpcTask(ZmqRpcTaskBase, ZmqRpcMixin):
+class ZmqRpcTask(ZmqRpcMixin, ZmqRpcTaskBase):
     pass
 
 
-class ZmqJsonRpcTask(ZmqRpcTaskBase, ZmqJsonRpcMixin):
+class ZmqJsonRpcTask(ZmqJsonRpcMixin, ZmqRpcTaskBase):
     pass
 
 
