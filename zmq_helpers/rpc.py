@@ -1,5 +1,6 @@
-from functools import partial
 import logging
+logging.basicConfig(level=logging.WARNING)
+from functools import partial
 import inspect
 from collections import OrderedDict
 try:
