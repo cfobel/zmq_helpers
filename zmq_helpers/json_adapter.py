@@ -46,7 +46,13 @@ class SingleFrameJson2Adapter(ZmqRpcTask):
                 'kwargs': kwargs, 'result': result, 'error_str': error_str,
                 'error': error}
         data = self._filter_multiframe_response_fields(data)
-        env['socks']['rpc'].send(jsonapi.dumps(data))
+        try:
+            json_data = jsonapi.dumps(data)
+        except Exception, e:
+            import traceback
+            data = {'result': None, 'error_str': traceback.format_exc()}
+            json_data = jsonapi.dumps(data)
+        env['socks']['rpc'].send(json_data)
 
     def _filter_multiframe_response_fields(self, response_data):
         return dict([(k, v) for k, v in response_data.iteritems()
