@@ -294,6 +294,8 @@ class DeferredRpcCommand(object):
         import eventlet
         import zmq.green as gzmq
 
+        none_on_error = kwargs.pop('_d_none_on_error', False)
+
         flags = gzmq.NOBLOCK
         ctx = gzmq.Context()
         sock = gzmq.Socket(ctx, gzmq.REQ)
@@ -312,7 +314,13 @@ class DeferredRpcCommand(object):
             sock.close()
             del sock
             del ctx
-        event.send(self._unpack_response(response))
+        try:
+            event.send(self._unpack_response(response))
+        except:
+            if none_on_error:
+                event.send(None)
+            else:
+                raise
 
     def send_request(self, sock, *args, **kwargs):
         if self.uuid is None:
