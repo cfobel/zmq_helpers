@@ -435,3 +435,12 @@ class ZmqSingleFrameJsonRpcProxy(ZmqJsonRpcProxy):
 
     def __init__(self, *args, **kwargs):
         super(ZmqSingleFrameJsonRpcProxy, self).__init__(*args, **kwargs)
+
+
+class ZmqRpcDemoTask(ZmqRpcTask):
+    def __init__(self, rpc_uri, **kwargs):
+        self.uris = OrderedDict(rpc=rpc_uri)
+        super(ZmqRpcDemoTask, self).__init__(**kwargs)
+
+    def get_uris(self):
+        return self.uris
