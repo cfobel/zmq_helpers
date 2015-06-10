@@ -3,7 +3,65 @@ import sys
 import logging
 from uuid import uuid4
 
+import zmq
 from path import path
+
+
+# URL for service names and port numbers, as defined in Internet Engineering
+# Task Force (IETF) [RFC6335][1], which:
+#
+# > defines the procedures that the Internet Assigned Numbers Authority
+# > (IANA) uses when handling assignment and other requests related to
+# > the Service Name and Transport Protocol Port Number registry".
+#
+# [1]: http://tools.ietf.org/html/rfc6335
+IANA_LIST_URL = ('http://www.iana.org/assignments/'
+                 'service-names-port-numbers/'
+                 'service-names-port-numbers.csv')
+
+
+def bind_to_random_port(sock, port_ranges=None):
+    if port_ranges is None:
+        port_ranges = get_unassigned_port_ranges()
+    for i, port_range in port_ranges.iterrows():
+        for port in xrange(port_range.start, port_range.end + 1):
+            try:
+                sock.bind('tcp://*:%d' % port)
+                return port
+            except zmq.ZMQError:
+                pass
+    raise
+
+
+def get_unassigned_port_ranges(csv_path=None):
+    import pandas as pd
+
+    if csv_path is None:
+        import pkg_resources
+
+        base_path = path(pkg_resources.resource_filename('zmq_helpers', ''))
+        # Load cached unassigned port ranges, as defined in Internet
+        # Engineering Task Force (IETF) [RFC6335][1], which:
+        #
+        # > defines the procedures that the Internet Assigned Numbers Authority
+        # > (IANA) uses when handling assignment and other requests related to
+        # > the Service Name and Transport Protocol Port Number registry".
+        #
+        # [1]: http://tools.ietf.org/html/rfc6335
+        cache_path = base_path.joinpath('static',
+                                        'service-names-port-numbers.h5')
+        return pd.read_hdf(str(cache_path), '/unassigned_ranges')
+
+    df = pd.read_csv(csv_path)
+    unassigned = df.loc[df.Description.str.lower() == 'unassigned'].copy()
+    port_ranges = pd.DataFrame([[int(x), int(x)]
+                                if '-' not in x else map(int, x.split('-'))
+                                for x in unassigned['Port Number']],
+                               columns=['start', 'end'])
+    port_ranges['count'] = port_ranges.end - port_ranges.start
+    port_ranges['inv_mod'] = 10 - (port_ranges['start'] % 10)
+    port_ranges.sort(['inv_mod', 'count'], inplace=True)
+    return port_ranges.drop('inv_mod', axis=1)[::-1].reset_index(drop=True)
 
 
 def log_label(obj=None, function_name=True):
