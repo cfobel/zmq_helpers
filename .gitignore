@@ -1,1 +1,5 @@
 *.pyc
+RELEASE-VERSION
+MANIFEST
+*.egg-info
+dist

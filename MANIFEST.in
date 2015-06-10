@@ -1,0 +1,6 @@
+include README.markdown
+include COPYING
+include setup.py
+include version.py
+include RELEASE-VERSION
+recursive-include zmq_helpers *.h5
