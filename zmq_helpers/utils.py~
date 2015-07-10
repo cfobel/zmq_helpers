@@ -4,7 +4,7 @@ import logging
 from uuid import uuid4
 
 import zmq
-from path_helpers import path
+from path import path
 
 
 # URL for service names and port numbers, as defined in Internet Engineering
